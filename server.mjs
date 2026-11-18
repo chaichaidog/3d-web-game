@@ -45,7 +45,7 @@ function api(name,body,req){
   const {r,p}=auth;r.touched=Date.now();
   if(p)p.seen=Date.now();
   if(name==='sync'){
-    if(p)cleanInput(p,body);
+    if(p)cleanInput(p,body,r.phase==='paused');
     return snapshot(r,p?.id,!p);
   }
   if(name==='teacher'){if(p)fail('限老師使用',403);control(r,body.cmd,body.mode);return {};}

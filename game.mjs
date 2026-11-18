@@ -1,24 +1,39 @@
 import {randomUUID} from 'node:crypto';
 import {fresh,program,core,targets,weapons,safe,clamp,sensors} from './public/rules.js';
+import {inputMask,commandsFor,move} from './public/motion.js';
 export function room(code) {
   return {code, mode:'survival', phase:'ready', wave:0, coreHp:100, kills:0, players:new Map(), enemies:[], shots:[], message:'集合完畢後，老師可以開始第一波。', touched:Date.now()};
 }
 export function player(name){
   return {id:randomUUID(),name,x:0,z:0,yaw:0,pitch:0,hp:100,coins:0,weapon:'pulse',owned:['pulse'],ammo:12,kits:1,
-    draft:fresh(),code:fresh(),keys:[],tap:false,editor:false,help:false,seen:Date.now(),delay:0,reload:0,hits:0,walked:false,gear:false,shot:0,hit:0};
+    draft:fresh(),code:fresh(),keys:[],tap:false,editor:false,help:false,seen:Date.now(),delay:0,reload:0,hits:0,walked:false,gear:false,shot:0,hit:0,
+    ack:0,epoch:0,sampled:false,credit:.25,lastBudget:performance.now()};
 }
-export function cleanInput(p,data){
+export function cleanInput(p,data,paused=false){
   p.keys=Array.isArray(data.keys)?data.keys.filter(k=>Object.hasOwn(sensors,k)&&!['empty','low','click'].includes(k)).slice(0,12):[];
   p.tap ||= data.tap===true;
   if(Number.isFinite(data.yaw)) p.yaw=data.yaw%(Math.PI*2);
   if(Number.isFinite(data.pitch)) p.pitch=clamp(data.pitch,-.32,.32);
   p.editor=safe(p.x,p.z)&&data.editor===true;
+  if(!Array.isArray(data.steps))return;
+  p.sampled=true;
+  const now=performance.now();
+  p.credit=Math.min(1,p.credit+(now-p.lastBudget)/1000);p.lastBudget=now;
+  if(data.epoch!==p.epoch)return;
+  for(const step of data.steps.slice(0,180)){
+    if(!step||!Number.isSafeInteger(step.seq)||step.seq<=p.ack||!Number.isFinite(step.dt)||!Number.isFinite(step.yaw)||!Number.isInteger(step.mask))continue;
+    p.ack=step.seq;
+    if(paused||p.editor)continue;
+    const dt=Math.min(clamp(step.dt,0,.06),p.credit);p.credit-=dt;
+    move(p,commandsFor(p.code,step.mask,p.hp,p.ammo),step.yaw,dt);
+    if(!safe(p.x,p.z))p.walked=true;
+  }
 }
-export function home(p){Object.assign(p,{x:0,z:0,hp:100,keys:[],tap:false,reload:0,ammo:weapons[p.weapon].cap});}
+export function home(p){Object.assign(p,{epoch:p.epoch+1,x:0,z:0,hp:100,keys:[],tap:false,reload:0,ammo:weapons[p.weapon].cap});}
 export function edit(p,body,run){
   if(!safe(p.x,p.z)) throw Error('請先回到安全區');
   p.draft=program(body);
-  if(run)p.code=structuredClone(p.draft);
+  if(run){p.code=structuredClone(p.draft);p.epoch++;}
 }
 export function buy(p,key){
   if(!safe(p.x,p.z)) throw Error('請先回到安全區');
@@ -55,7 +70,7 @@ export function nextWave(r) {
 }
 export function control(r,cmd,mode){
   if(cmd==='next')return nextWave(r);
-  if(cmd==='pause'&&['paused','active'].includes(r.phase)){r.phase=r.phase==='active'?'paused':'active';return;}
+  if(cmd==='pause'&&['paused','active'].includes(r.phase)){r.phase=r.phase==='active'?'paused':'active';for(const p of r.players.values())p.epoch++;return;}
   if(cmd==='recall'){for(const p of r.players.values())home(p);return;}
   if(cmd==='mode'&&['survival','defense'].includes(mode)){
     r.mode=mode;r.wave=0;r.enemies=[];r.cache=null;r.coreHp=100;r.phase='ready';r.message='已切換模式，裝備與積木已保留。';return;
@@ -93,16 +108,8 @@ function runPlayer(r,p,dt){
   p.delay=Math.max(0,p.delay-dt);
   if(p.reload>0){p.reload-=dt;if(p.reload<=0)p.ammo=weapons[p.weapon].cap;}
   if(p.editor||!p.code.loop||!active){p.tap=false;return;}
-  const flags=new Set(p.keys);
-  if(p.ammo===0)flags.add('empty');
-  if(p.hp<40)flags.add('low');
-  if(p.tap)flags.add('click');p.tap=false;
-  const commands=new Set(p.code.rules.filter(row=>flags.has(row.when)).map(row=>row.do));
-  const f=Number(commands.has('forward'))-Number(commands.has('back'));
-  const s=Number(commands.has('right'))-Number(commands.has('left'));
-  const scale=(commands.has('sprint')?7:4.5)*dt/Math.max(1,Math.hypot(f,s));
-  p.x=clamp(p.x+(f*Math.sin(p.yaw)+s*Math.cos(p.yaw))*scale,-23,23);
-  p.z=clamp(p.z+(f*Math.cos(p.yaw)-s*Math.sin(p.yaw))*scale,-23,23);
+  const commands=commandsFor(p.code,inputMask(p.keys,p.tap),p.hp,p.ammo);p.tap=false;
+  if(!p.sampled)move(p,commands,p.yaw,dt);
   if(!safe(p.x,p.z))p.walked=true;
   if(commands.has('fire'))shoot(r,p);
   if(commands.has('reload')&&p.reload<=0&&p.ammo<weapons[p.weapon].cap)p.reload=1;
@@ -143,7 +150,7 @@ export function snapshot(r,id,teacher=false){
     players:[...r.players.values()].map(p=>{
       const {id:pid,name,x,z,yaw,pitch,hp,weapon,shot,hit,editor,help}=p;
       const basic={id:pid,name,x,z,yaw,pitch,hp,weapon,shot,hit,editor,help,online:Date.now()-p.seen<5000};
-      if(pid===id||teacher)Object.assign(basic,{coins:p.coins,kits:p.kits,owned:p.owned,ammo:p.ammo,reload:p.reload,walked:p.walked,hits:p.hits,gear:p.gear});
+      if(pid===id||teacher)Object.assign(basic,{epoch:p.epoch,ack:p.ack,coins:p.coins,kits:p.kits,owned:p.owned,ammo:p.ammo,reload:p.reload,walked:p.walked,hits:p.hits,gear:p.gear});
       if(teacher)Object.assign(basic,{draft:p.draft,code:p.code});
       return basic;
     })};

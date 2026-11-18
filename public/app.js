@@ -1,9 +1,31 @@
 import {actions,sensors,weapons,safe,fresh,clamp,program} from './rules.js';
 import {cover,scene} from './view.js';
+import {inputMask,PredictedMotion} from './motion.js';
+import {fieldHint,blockHint} from './lesson.js';
 const $=id=>document.getElementById(id);
 const make=(tag,txt,cls)=>{const el=document.createElement(tag);if(txt!==undefined)el.textContent=txt;if(cls)el.className=cls;return el;};
 let session=null,state=null,prev=null,stamp=0,me=null,yaw=0,pitch=0,tap=false,draft=fresh(),active=fresh(),cmdQueue=Promise.resolve(),toastTimer,clock=0,networkError=false;
 const held=new Set(), panels=$('panel'), world=$('world'), cards=new Map();
+const motion=new PredictedMotion();
+let interval=120,guideHidden=false,walked=false,moveTap=false,motionTime=0,lastPreview=0;
+function sampleMovement(now){
+  if(now<=motionTime)return;
+  const dt=clamp((now-motionTime)/1000,0,.06);motionTime=now;
+  if(me&&!panels.open&&!networkError&&!document.hidden&&now-stamp<1200&&state.phase!=='paused'){
+    motion.advance(active,inputMask(held,moveTap),yaw,dt,me.hp,me.ammo);
+  }
+  moveTap=false;
+}
+function refreshGuide(){
+  $('guide').hidden=guideHidden;$('resumeGuide').hidden=!guideHidden;
+  if(!me||guideHidden)return;
+  const hint=fieldHint(active,me,walked);
+  $('guideStep').textContent='新手練習　'+hint.stage;$('guideTitle').textContent=hint.title;$('guideText').textContent=hint.text;
+  $('guideAction').hidden=!hint.action;$('guideAction').textContent=hint.action==='home'?'返回基地':'打開積木';
+  $('guideAction').onclick=hint.action==='home'?()=>$('backBtn').click():()=>openPanel('blocks');
+}
+$('skipGuide').onclick=()=>{guideHidden=true;sessionStorage.setItem('outpost.guide.'+session.id,'hide');refreshGuide();};
+$('resumeGuide').onclick=()=>{guideHidden=false;sessionStorage.removeItem('outpost.guide.'+session.id);refreshGuide();};
 function notify(msg){$('toast').textContent=msg;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').textContent='',3000);}
 function message(msg){const el=$('panelMessage');if(panels.open&&el)el.textContent=msg;else notify(msg);}
 async function api(name,body={}){
@@ -21,7 +43,7 @@ for(const form of ['join','create'])$(form).onsubmit=async e=>{
 };
 async function enter(s){
   session=s;
-  const saved=await api('restore');if(!s.teacher){draft=saved.draft;active=saved.code;}
+  const saved=await api('restore');if(!s.teacher){draft=saved.draft;active=saved.code;guideHidden=sessionStorage.getItem('outpost.guide.'+s.id)==='hide';walked=sessionStorage.getItem('outpost.walked.'+s.id)==='yes';}
   sessionStorage.setItem('outpost.session',JSON.stringify(s));
   $('lobby').hidden=true;$(s.teacher?'teacher':'game').hidden=false;
   if(s.teacher)$('roomTitle').textContent='房號　'+s.code;
@@ -33,48 +55,71 @@ async function sync(){
   if(!session)return;
   try{
     const clicked=tap;tap=false;
-    const s=await api('sync',{keys:[...held],tap:clicked,yaw,pitch,editor:panels.open});
-    prev=state;state=s;stamp=performance.now();me=s.players.find(p=>p.id===session.id);
+    const s=await api('sync',{keys:[...held],tap:clicked,yaw,pitch,editor:panels.open,epoch:motion.epoch,steps:motion.pending.slice()});
+    const now=performance.now();if(stamp)interval=clamp(interval*.45+(now-stamp)*.55,45,500);
+    prev=state;state=s;stamp=now;me=s.players.find(p=>p.id===session.id);
+    if(me){
+      if(!prev){yaw=me.yaw;pitch=me.pitch;}
+      motion.reconcile(me,active,state.phase==='paused');
+      if(!walked&&(me.walked||Math.hypot(me.x,me.z)>.55)){walked=true;sessionStorage.setItem('outpost.walked.'+session.id,'yes');}
+      refreshGuide();
+    }
     if(networkError){networkError=false;$('status').textContent='已重新連線 ／ '+s.code;}
     if(session.teacher)monitor();else if(me)hud();
   }catch(err){
     if(err.status===401){sessionStorage.removeItem('outpost.session');location.reload();return;}
     networkError=true;$('status').textContent='連線中斷，正在重連…';held.clear();
   }
-  setTimeout(sync,session?.teacher?300:75);
+  setTimeout(sync,session?.teacher?280:40);
 }
 const phaseLabel={ready:'準備中',active:'交戰中',paused:'已暫停',clear:'本波完成',lost:'可重試'};
 function hud(){
   const isSafe=safe(me.x,me.z);
   $('hud').textContent=(isSafe?'安全區':'野外')+'　♥ '+me.hp+'　◈ '+me.coins+'　'+weapons[me.weapon].name+'　'+(me.reload>0?'換彈中':me.ammo+'/'+weapons[me.weapon].cap);
   const mission=!me.walked?'走出基地光圈':!me.hits?'命中任一練習靶':!state.kills?'和全隊擊敗一隻殭屍':!me.gear?'回商店買一把新武器':'自由挑戰：加入自動換彈或衝刺';
-  $('task').textContent='任務　'+mission+'　｜　第 '+state.wave+' 波 · '+phaseLabel[state.phase]+(state.mode==='defense'?'　發電機 '+state.coreHp+'%':state.cache&&state.phase==='active'?(state.cache.claimed?'　已取得補給':'　野外補給 '+Math.round(Math.hypot(me.x-state.cache.x,me.z-state.cache.z))+' m'):'');
+  $('task').textContent=(guideHidden||me.hits?'任務　'+mission+'　｜　':'')+'第 '+state.wave+' 波 · '+phaseLabel[state.phase]+(state.mode==='defense'?'　發電機 '+state.coreHp+'%':state.cache&&state.phase==='active'?(state.cache.claimed?'　已取得補給':'　野外補給 '+Math.round(Math.hypot(me.x-state.cache.x,me.z-state.cache.z))+' m'):'');
   $('shopBtn').disabled=$('editBtn').disabled=!isSafe;$('helpBtn').textContent=me.help?'收回舉手':'舉手求助';
   $('reticle').textContent=prev && (prev.players.find(p=>p.id===me.id)?.hit??me.hit)<me.hit?'✳':'＋';
 }
 function frame(now){
   if(!session)return;const dt=clamp((now-clock)/1000,0,.05);clock=now;
-  if(!session.teacher&&me&&!document.hidden){
+  if(session.teacher&&state&&!document.hidden&&now-lastPreview>=(cards.size>4?80:50)){
+    lastPreview=now;const view=betweenSnapshots(now);
+    for(const p of view.players){const card=cards.get(p.id);if(card&&p.online)scene(card.c,view,p);}
+  }
+  if(!session.teacher&&me&&!document.hidden&&!panels.open){
     if(held.has('arrowleft'))yaw-=dt*1.8;if(held.has('arrowright'))yaw+=dt*1.8;
-    const t=clamp((now-stamp)/90,0,1);
-    const interpolate=(p,b)=>b&&Math.hypot(p.x-b.x,p.z-b.z)<2?{...p,x:b.x+(p.x-b.x)*t,z:b.z+(p.z-b.z)*t}:p;
-    const worldState=prev?{...state,enemies:state.enemies.map(e=>interpolate(e,prev.enemies.find(b=>b.id===e.id))),players:state.players.map(p=>interpolate(p,prev.players.find(b=>b.id===p.id)))}:state;
-    scene(world,worldState,worldState.players.find(p=>p.id===me.id),{yaw,pitch});
+    sampleMovement(now);
+    scene(world,betweenSnapshots(now),{...me,x:motion.x,z:motion.z},{yaw,pitch});
   }
   requestAnimationFrame(frame);
 }
-function resetKeys(){held.clear();tap=false;}
+function betweenSnapshots(now){
+  if(!prev)return state;
+  const t=clamp((now-stamp)/interval,0,1);
+  function blend(p,b){
+    if(!b||p.epoch!==b.epoch||Math.hypot(p.x-b.x,p.z-b.z)>4)return p;
+    const result={...p,x:b.x+(p.x-b.x)*t,z:b.z+(p.z-b.z)*t};
+    if(Number.isFinite(p.yaw)){
+      const angle=p.yaw-b.yaw;result.yaw=b.yaw+Math.atan2(Math.sin(angle),Math.cos(angle))*t;
+      result.pitch=b.pitch+(p.pitch-b.pitch)*t;
+    }
+    return result;
+  }
+  return {...state,enemies:state.enemies.map(e=>blend(e,prev.enemies.find(b=>b.id===e.id))),players:state.players.map(p=>blend(p,prev.players.find(b=>b.id===p.id)))};
+}
+function resetKeys(){motionTime=performance.now();held.clear();tap=false;moveTap=false;}
 window.addEventListener('blur',resetKeys);document.addEventListener('visibilitychange',resetKeys);
 window.addEventListener('keydown',e=>{
   if(!me)return;const k=e.key.toLowerCase();
-  if(k==='tab'&&!e.repeat){e.preventDefault();if(panels.open)panels.close();else openPanel('blocks');return;}
+  if(k==='tab'&&!e.repeat&&!panels.open){e.preventDefault();openPanel('blocks');return;}
   if(panels.open)return;
-  if(['arrowleft','arrowright','shift','w','a','s','d','r','q'].includes(k)){e.preventDefault();held.add(k);}
-});window.addEventListener('keyup',e=>held.delete(e.key.toLowerCase()));
-world.addEventListener('mousedown',e=>{if(e.button!==0)return;held.add('mouse');tap=true;world.focus();if(!document.pointerLockElement)world.requestPointerLock?.()?.catch?.(()=>{});});
+  if(['arrowleft','arrowright','shift','w','a','s','d','r','q'].includes(k)){e.preventDefault();if(!held.has(k)){sampleMovement(performance.now());held.add(k);}}
+});window.addEventListener('keyup',e=>{const k=e.key.toLowerCase();if(held.has(k)){sampleMovement(performance.now());held.delete(k);}});
+world.addEventListener('mousedown',e=>{if(e.button!==0)return;held.add('mouse');tap=true;moveTap=true;world.focus();if(!document.pointerLockElement)world.requestPointerLock?.()?.catch?.(()=>{});});
 window.addEventListener('mouseup',()=>held.delete('mouse'));
 document.addEventListener('mousemove',e=>{if(document.pointerLockElement===world){yaw+=e.movementX*.0026;pitch=clamp(pitch-e.movementY*.0018,-.32,.32);}});
-document.addEventListener('pointerlockchange',resetKeys);
+document.addEventListener('pointerlockchange',()=>{if(!document.pointerLockElement)resetKeys();});
 function openPanel(kind){
   if(!me||!safe(me.x,me.z)){notify('回到安全區就能使用');return;}
   document.exitPointerLock?.();resetKeys();panels.showModal();
@@ -89,7 +134,15 @@ function changed(){sendDraft(draft);bench();}
 function block(label,cls,fn){const b=make('button',label,'block '+cls);b.type='button';b.onclick=fn;return b;}
 function bench(){
   $('panelTitle').textContent='角色積木';const host=$('panelBody');host.replaceChildren();
-  const intro=make('p','從左側拖入積木，或點積木加入。先試「重複無限次 → 如果 W 被按住 → 向前移動」。','muted');
+  const intro=make('p','','bench-hint');intro.setAttribute('aria-live','polite');
+  const guided=!guideHidden&&(!me.hits);
+  const controls=new Map();
+  function cue(){
+    for(const el of controls.values())el.classList.remove('next-step');
+    if(!guided){intro.textContent='點選或拖入積木，選好條件與動作後執行。';return;}
+    const hint=blockHint(draft,active,walked);
+    intro.textContent='下一步　'+hint.text;controls.get(hint.target+(hint.i??''))?.classList.add('next-step');
+  }
   const benchEl=make('div',undefined,'bench'),palette=make('div',undefined,'palette'),stack=make('div',undefined,'stack');
   function insert(kind){
     if(kind==='loop')draft.loop=true;
@@ -98,7 +151,7 @@ function bench(){
     changed();
   }
   for(const [kind,label] of [['loop','重複無限次'],['if','如果…那麼']]){
-    const b=block(label,'control',()=>insert(kind));b.draggable=true;b.ondragstart=e=>e.dataTransfer.setData('text/plain',kind);palette.append(b);
+    const b=block(label,'control',()=>insert(kind));controls.set(kind,b);b.draggable=true;b.ondragstart=e=>e.dataTransfer.setData('text/plain',kind);palette.append(b);
   }
   stack.ondragover=e=>e.preventDefault();stack.ondrop=e=>{e.preventDefault();const kind=e.dataTransfer.getData('text/plain');if(['loop','if'].includes(kind))insert(kind);};
   stack.append(make('div','⚑　當按下開始時','block event'));
@@ -110,7 +163,7 @@ function bench(){
       const row=make('div',undefined,'rule'),del=make('button','×','tiny');del.title='移除此條件';del.onclick=()=>{draft.rules.splice(i,1);changed();};row.append(del);
       for(const [prop,options,className,placeholder] of [['when',sensors,'sense','選擇條件'],['do',actions,'act','選擇動作']]){
         const line=make('div');line.append(prop==='when'?'如果 ':'那麼 ');const sel=make('select',undefined,'block '+className);sel.setAttribute('aria-label',placeholder);sel.append(new Option(placeholder,''));
-        for(const [v,label] of Object.entries(options))sel.append(new Option(label,v));sel.value=rule[prop];sel.onchange=()=>{rule[prop]=sel.value;sendDraft(draft);};line.append(sel);row.append(line);
+        for(const [v,label] of Object.entries(options))sel.append(new Option(label,v));sel.value=rule[prop];controls.set(prop+i,sel);sel.onchange=()=>{rule[prop]=sel.value;sendDraft(draft);cue();};line.append(sel);row.append(line);
       }
       loop.append(row);
     });stack.append(loop);
@@ -120,7 +173,7 @@ function bench(){
   const revert=make('button','還原到上次執行');revert.onclick=()=>{draft=structuredClone(active);changed();};
   const save=make('button','下載積木');save.onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(draft,null,2)],{type:'application/json'}));const a=make('a');a.href=url;a.download='outpost-blocks.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),5000);};
   const restore=make('button','匯入積木');restore.onclick=()=>{const file=make('input');file.type='file';file.accept='.json';file.onchange=action(async()=>{const f=file.files[0];if(!f)return;if(f.size>16000)throw Error('檔案太大');draft=program(JSON.parse(await f.text()));changed();});file.click();};
-  bar.append(run,revert,save,restore);const feedback=make('div','','panelmsg');feedback.id='panelMessage';host.append(intro,benchEl,bar,feedback);
+  controls.set('run',run);bar.append(run,revert,save,restore);const feedback=make('div','','panelmsg');feedback.id='panelMessage';host.append(intro,benchEl,bar,feedback);cue();
 }
 function shop(){
   $('panelTitle').textContent='基地補給站';const host=$('panelBody');host.replaceChildren(make('p','錢包　◈ '+me.coins+'　｜　醫療包 '+me.kits));
@@ -141,7 +194,6 @@ function monitor(){
     const ui=cards.get(p.id);ui.name.textContent=(p.help?'✋ ':'')+p.name+(p.online?'':' · 離線');
     ui.meta.textContent=(p.editor?'正在準備':'遊戲中')+'　♥ '+p.hp+'　◈ '+p.coins+'　'+weapons[p.weapon].name;
     ui.b.textContent='目前積木草稿\n'+listing(p.draft)+(JSON.stringify(p.draft)!==JSON.stringify(p.code)?'\n\n執行中版本\n'+listing(p.code):'');
-    scene(ui.c,state,p);
   }
 }
 for(const [id,cmd] of [['waveBtn','next'],['pauseBtn','pause'],['recallBtn','recall'],['modeBtn','mode']])$(id).onclick=action(async()=>{
