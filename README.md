@@ -2,7 +2,7 @@
 
 一個給國中 Scratch 課使用的多人 3D 生存遊戲原型。老師建房，學生用暱稱與六位數房號加入。建議用電腦、鍵盤、滑鼠，老師與學生分別開啟同一個網址。使用原創 Canvas 透視場景，前後端由同一個 Node.js 程序提供，無外部遊戲素材或 CDN 依賴。
 
-[部署至 Render](https://dashboard.render.com/blueprint/new?repo=https://github.com/chaichaidog/3d-web-game)
+[部署至 Render](https://render.com/deploy?repo=https://github.com/chaichaidog/3d-web-game)
 
 ## 部署
 
