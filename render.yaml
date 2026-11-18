@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: zombie-block-lab
+    runtime: node
+    plan: free
+    buildCommand: npm ci --ignore-scripts
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: TEACHER_KEY
+        sync: false
