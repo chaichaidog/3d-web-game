@@ -72,22 +72,23 @@ export class Renderer{
       uniform mat4 camera;
       uniform vec3 eye;
       out vec4 vColor;
-      out float distanceFromEye;
+      out vec3 worldPosition;
       void main(){
         vec4 world=model*vec4(position,1.);
         vec3 scale=vec3(dot(model[0].xyz,model[0].xyz),dot(model[1].xyz,model[1].xyz),dot(model[2].xyz,model[2].xyz));
         vec3 n=normalize(mat3(model)*(normal/max(scale,vec3(.00001))));
         float light=.67+.33*max(0.,dot(n,normalize(vec3(-.5,.8,-.4))));
         vColor=vec4(tint.rgb*mix(light,1.,emission),tint.a);
-        distanceFromEye=length(world.xyz-eye);
+        worldPosition=world.xyz;
         gl_Position=camera*world;
       }`);
     const fragment=shader(gl.FRAGMENT_SHADER,`#version 300 es
       precision highp float;
       in vec4 vColor;
-      in float distanceFromEye;
+      in vec3 worldPosition;
+      uniform vec3 eye;
       out vec4 result;
-      void main(){float fog=smoothstep(24.,85.,distanceFromEye);result=vec4(mix(vColor.rgb,vec3(.36,.43,.49),fog),vColor.a);}
+      void main(){float fog=smoothstep(24.,85.,length(worldPosition-eye));result=vec4(mix(vColor.rgb,vec3(.36,.43,.49),fog),vColor.a);}
     `);
     this.program=gl.createProgram();gl.attachShader(this.program,vertex);gl.attachShader(this.program,fragment);gl.linkProgram(this.program);
     if(!gl.getProgramParameter(this.program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(this.program));
