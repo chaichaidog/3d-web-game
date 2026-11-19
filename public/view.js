@@ -100,7 +100,11 @@ export function scene(canvas,state,me,view=me,first=true){
   }
   const livingIds=new Set();
   for(const e of state.enemies){livingIds.add(e.id);character(out,e,poseFor(v,e,dt));}
-  for(const p of state.players)if(p.id!==me.id&&p.online){livingIds.add(p.id);character(out,p,poseFor(v,p,dt));}
+  for(const p of state.players)if(p.id!==me.id&&p.online){
+    livingIds.add(p.id);const pose=poseFor(v,p,dt);
+    // Classmates share the spawn point; never put the camera inside their torso.
+    if(Math.hypot(p.x-me.x,p.z-me.z)>.75)character(out,p,pose);
+  }
   for(const e of state.fallen||[]){
     const pose=v.poses.get(e.id);
     if(!pose)continue;livingIds.add(e.id);
