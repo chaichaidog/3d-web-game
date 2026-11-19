@@ -1,12 +1,27 @@
 import {actions,sensors,weapons,safe,fresh,clamp,program} from './rules.js';
-import {cover,scene} from './view.js';
+import {cover,scene,localShot} from './view.js';
 import {inputMask,PredictedMotion} from './motion.js';
+import {GunFeedback,unlockAudio,setSound,sound} from './feedback.js';
 import {fieldHint,blockHint} from './lesson.js';
 const $=id=>document.getElementById(id);
 const make=(tag,txt,cls)=>{const el=document.createElement(tag);if(txt!==undefined)el.textContent=txt;if(cls)el.className=cls;return el;};
 let session=null,state=null,prev=null,stamp=0,me=null,yaw=0,pitch=0,tap=false,draft=fresh(),active=fresh(),cmdQueue=Promise.resolve(),toastTimer,clock=0,networkError=false;
 const held=new Set(), panels=$('panel'), world=$('world'), cards=new Map();
 const motion=new PredictedMotion();
+const gun=new GunFeedback();
+let shotTap=false,hitUntil=0,confirmedHits=0,audioOn=true;
+const soundButton=make('button','音效開');
+soundButton.onclick=()=>{audioOn=!audioOn;setSound(audioOn);soundButton.textContent=audioOn?'音效開':'音效關';};
+$('game').querySelector('nav').append(soundButton);
+function animateGun(dt,now){
+  if(!me)return;
+  const local={...me,x:motion.x,z:motion.z,yaw,pitch};
+  const enabled=!panels.open&&!networkError&&!document.hidden&&now*1000-stamp<1200&&state.phase!=='paused';
+  if(gun.update(dt,now,local,active,inputMask(held,shotTap),enabled)){
+    localShot(world,state,local);sound('fire',me.weapon);
+  }
+  shotTap=false;
+}
 let interval=120,guideHidden=false,walked=false,moveTap=false,motionTime=0,lastPreview=0;
 function sampleMovement(now){
   if(now<=motionTime)return;
@@ -61,6 +76,9 @@ async function sync(){
     if(me){
       if(!prev){yaw=me.yaw;pitch=me.pitch;}
       motion.reconcile(me,active,state.phase==='paused');
+      gun.sync(me);
+      if(prev&&me.hit>confirmedHits){hitUntil=performance.now()+180;sound('hit',me.weapon);}
+      confirmedHits=me.hit;
       if(!walked&&(me.walked||Math.hypot(me.x,me.z)>.55)){walked=true;sessionStorage.setItem('outpost.walked.'+session.id,'yes');}
       refreshGuide();
     }
@@ -79,7 +97,6 @@ function hud(){
   const mission=!me.walked?'走出基地光圈':!me.hits?'命中任一練習靶':!state.kills?'和全隊擊敗一隻殭屍':!me.gear?'回商店買一把新武器':'自由挑戰：加入自動換彈或衝刺';
   $('task').textContent=(guideHidden||me.hits?'任務　'+mission+'　｜　':'')+'第 '+state.wave+' 波 · '+phaseLabel[state.phase]+(state.mode==='defense'?'　發電機 '+state.coreHp+'%':state.cache&&state.phase==='active'?(state.cache.claimed?'　已取得補給':'　野外補給 '+Math.round(Math.hypot(me.x-state.cache.x,me.z-state.cache.z))+' m'):'');
   $('shopBtn').disabled=$('editBtn').disabled=!isSafe;$('helpBtn').textContent=me.help?'收回舉手':'舉手求助';
-  $('reticle').textContent=prev && (prev.players.find(p=>p.id===me.id)?.hit??me.hit)<me.hit?'✳':'＋';
 }
 function frame(now){
   if(!session)return;const dt=clamp((now-clock)/1000,0,.05);clock=now;
@@ -90,7 +107,11 @@ function frame(now){
   if(!session.teacher&&me&&!document.hidden&&!panels.open){
     if(held.has('arrowleft'))yaw-=dt*1.8;if(held.has('arrowright'))yaw+=dt*1.8;
     sampleMovement(now);
-    scene(world,betweenSnapshots(now),{...me,x:motion.x,z:motion.z},{yaw,pitch});
+    animateGun(dt,now/1000);
+    $('reticle').textContent=now<hitUntil?'✳':'＋';
+    $('reticle').style.transform='translate(-50%,-50%) scale('+(1+gun.kick*.35)+')';
+    scene(world,betweenSnapshots(now),{...me,x:motion.x,z:motion.z},{yaw,pitch,kick:gun.kick,lastFire:gun.lastFire});
+    if(world.dataset.error){$('task').textContent=world.dataset.error;}
   }
   requestAnimationFrame(frame);
 }
@@ -108,7 +129,7 @@ function betweenSnapshots(now){
   }
   return {...state,enemies:state.enemies.map(e=>blend(e,prev.enemies.find(b=>b.id===e.id))),players:state.players.map(p=>blend(p,prev.players.find(b=>b.id===p.id)))};
 }
-function resetKeys(){motionTime=performance.now();held.clear();tap=false;moveTap=false;}
+function resetKeys(){motionTime=performance.now();held.clear();tap=false;moveTap=false;shotTap=false;}
 window.addEventListener('blur',resetKeys);document.addEventListener('visibilitychange',resetKeys);
 window.addEventListener('keydown',e=>{
   if(!me)return;const k=e.key.toLowerCase();
@@ -116,7 +137,12 @@ window.addEventListener('keydown',e=>{
   if(panels.open)return;
   if(['arrowleft','arrowright','shift','w','a','s','d','r','q'].includes(k)){e.preventDefault();if(!held.has(k)){sampleMovement(performance.now());held.add(k);}}
 });window.addEventListener('keyup',e=>{const k=e.key.toLowerCase();if(held.has(k)){sampleMovement(performance.now());held.delete(k);}});
-world.addEventListener('mousedown',e=>{if(e.button!==0)return;held.add('mouse');tap=true;moveTap=true;world.focus();if(!document.pointerLockElement)world.requestPointerLock?.()?.catch?.(()=>{});});
+world.addEventListener('mousedown',e=>{
+  if(e.button!==0)return;
+  unlockAudio();held.add('mouse');tap=true;moveTap=true;shotTap=true;world.focus();
+  animateGun(0,performance.now()/1000);
+  if(!document.pointerLockElement)world.requestPointerLock?.()?.catch?.(()=>{});
+});
 window.addEventListener('mouseup',()=>held.delete('mouse'));
 document.addEventListener('mousemove',e=>{if(document.pointerLockElement===world){yaw+=e.movementX*.0026;pitch=clamp(pitch-e.movementY*.0018,-.32,.32);}});
 document.addEventListener('pointerlockchange',()=>{if(!document.pointerLockElement)resetKeys();});
