@@ -1,8 +1,9 @@
-import {Renderer,identity,transform,multiply,cameraMatrix} from './mesh.js';
+import {Renderer,identity,transform,multiply,cameraMatrix,rendererQuality} from './mesh.js';
 import {part,joint,character,weapon,muzzle,landscape} from './models.js';
 import {core,targets,weapons} from './rules.js';
 import {traceShot} from './aim.js';
 export {cover} from './cover.js';
+export const setQuality=rendererQuality;
 
 const views=new WeakMap(),scenery=landscape();
 function getView(canvas){
@@ -54,14 +55,17 @@ function updateEffects(v,state,me,now){
   for(const [id,at] of v.seen)if(now-at>3)v.seen.delete(id);
 }
 function labels(v,canvas,state,me,matrix){
+  const now=performance.now();if(now-(v.lastLabels||0)<100)return;v.lastLabels=now;
   if(!v.labels){
     v.labels=document.createElement('canvas');v.labels.className='model-labels';v.labels.setAttribute('aria-hidden','true');
     canvas.parentElement.style.position='relative';canvas.parentElement.append(v.labels);
     Object.assign(v.labels.style,{position:'absolute',pointerEvents:'none',background:'transparent'});
   }
   const label=v.labels,w=canvas.clientWidth,h=canvas.clientHeight;
-  if(label.width!==w||label.height!==h){label.width=w;label.height=h;}
-  Object.assign(label.style,{left:canvas.offsetLeft+'px',top:canvas.offsetTop+'px',width:w+'px',height:h+'px'});
+  if(label.width!==w||label.height!==h){
+    label.width=w;label.height=h;
+    Object.assign(label.style,{left:canvas.offsetLeft+'px',top:canvas.offsetTop+'px',width:w+'px',height:h+'px'});
+  }
   const g=label.getContext('2d');g.clearRect(0,0,w,h);g.textAlign='center';g.font='600 12px "Microsoft JhengHei",sans-serif';
   for(const p of [...state.enemies,...state.players.filter(p=>p.online&&p.id!==me.id)]){
     const height=p.type==='boss'?3.85:p.type==='swarm'?1.65:2.15;
@@ -77,6 +81,7 @@ export function scene(canvas,state,me,view=me,first=true){
   if(!canvas.clientWidth||!me)return;
   let v;
   try{v=getView(canvas);}catch(err){canvas.dataset.error=err.message;canvas.setAttribute('aria-label',err.message);return;}
+  if(canvas.id==='world')v.renderer.adapt(view.frameMs||16);
   const now=performance.now()/1000,dt=state.phase==='paused'?0:Math.min(now-v.last,.08);v.last=now;v.time+=dt;
   const out=scenery.slice(),root=identity();
   for(const t of targets){
@@ -139,10 +144,11 @@ export function scene(canvas,state,me,view=me,first=true){
     const weaponObjects=[],kick=view.kick??0,move=Math.min(v.speed/4.5,1);
     const reload=me.reload>0?Math.sin((1-me.reload)*Math.PI):0;
     const sway=Math.sin(v.walk)*.008*move,breath=Math.sin(v.time*1.8)*.0025;
-    const weaponRoot=transform(.21+sway,-.22+breath+Math.cos(v.walk*2)*.005*move,.56,-.015,-.045,-sway*1.3);
+    const weaponRoot=transform(.22+sway,-.205+breath+Math.cos(v.walk*2)*.005*move,me.weapon==='pulse'?.6:.76,-.035,-.11,-.025-sway*1.3);
     weapon(weaponObjects,weaponRoot,me.weapon,kick,reload);
     const flashAge=now-(view.lastFire??-10);
-    if(flashAge<.085)muzzle(weaponObjects,joint(weaponRoot,0,.025,weapons[me.weapon].spread||me.weapon==='rapid'?.49:.32),me.weapon==='scatter'?.11:.075,flashAge);
+    if(flashAge<.07)muzzle(weaponObjects,joint(weaponRoot,0,.035,me.weapon==='pulse'?.29:.52),me.weapon==='scatter'?.11:.075,flashAge);
     v.renderer.render(weaponObjects,cameraMatrix(0,0,0,0,0,aspect),[0,0,0],false);
   }
+  if(now-(v.lastStats||0)>1){v.lastStats=now;canvas.dataset.parts=String(out.length);canvas.dataset.resolution=canvas.width+'×'+canvas.height;}
 }

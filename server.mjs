@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {resolve,extname} from 'node:path';
 import {room,player,edit,buy,cleanInput,control,home,snapshot,tick} from './game.mjs';
+import {realtime} from './realtime.mjs';
 
 const publicDir=fileURLToPath(new URL('./public/',import.meta.url));
 const types={'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'};
@@ -79,6 +80,7 @@ const server=http.createServer(async(req,res)=>{
   }catch(err){if(!res.headersSent)res.writeHead(err.status||400,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify({error:err.message}));}
 });
 setInterval(()=>{for(const r of rooms.values())tick(r,.05);},50).unref();
+realtime(server,sessions,api);
 setInterval(()=>{
   const now=Date.now();for(const [key,a] of attempts)if(now-a.start>60000)attempts.delete(key);
   for(const [code,r] of rooms)if(now-r.touched>2*60*60*1000){rooms.delete(code);for(const [k,s] of sessions)if(s.r===r)sessions.delete(k);}

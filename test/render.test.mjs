@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {geometry,cameraMatrix,transform,multiply,identity} from '../public/mesh.js';
-import {character,weapon} from '../public/models.js';
+import {geometry,meshVertices,cameraMatrix,transform,multiply,identity} from '../public/mesh.js';
+import {character,weapon,landscape} from '../public/models.js';
 import {GunFeedback} from '../public/feedback.js';
 import {inputMask} from '../public/motion.js';
 import {player,room,edit,cleanInput,tick} from '../game.mjs';
 const code={loop:true,rules:[{when:'mouse',do:'fire'}]};
 test('models have finite triangles and articulated poses change their limb transforms',()=>{
-  for(const kind of ['box','sphere','cylinder','cone']){
+  for(const kind of ['box','sphere','cylinder','cone','taper','wedge']){
     const mesh=geometry(kind);assert.ok(mesh.length>=108);assert.equal(mesh.length%18,0);
     assert.ok([...mesh].every(Number.isFinite));
   }
@@ -15,7 +15,14 @@ test('models have finite triangles and articulated poses change their limb trans
   const pose={yaw:0,phase:0,speed:2,time:0,pain:0,attack:0};
   character(a,p,pose);character(b,p,{...pose,phase:Math.PI/2});
   assert.equal(a.length,b.length);assert.ok(a.some((part,i)=>part.matrix.some((n,j)=>Math.abs(n-b[i].matrix[j])>.01)));
-  for(const key of ['pulse','rapid','scatter']){const gun=[];weapon(gun,identity(),key,.2,.5);assert.ok(gun.length>=16);assert.ok(gun.every(p=>[...p.matrix].every(Number.isFinite)));}
+  assert.ok(a.length<=14,'detail must be baked into limbs, not rebuilt every frame');
+  for(const key of ['pulse','rapid','scatter']){
+    const gun=[];weapon(gun,identity(),key,.2,.5);
+    assert.ok(gun.reduce((n,p)=>n+meshVertices(p.kind).length,0)>3000);
+    assert.ok(gun.every(p=>[...p.matrix,...meshVertices(p.kind)].every(Number.isFinite)));
+  }
+  const map=landscape();assert.equal(map.length,1);
+  assert.equal(meshVertices(map[0].kind),meshVertices(landscape()[0].kind),'scene geometry is reused');
 });
 test('camera faces the same direction as the server hitscan for yaw and pitch',()=>{
   for(const yaw of [0,Math.PI/2,-Math.PI,1.8])for(const pitch of [-.2,0,.2]){

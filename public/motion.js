@@ -29,7 +29,7 @@ export function move(point,commands,yaw,dt){
 
 // Each sample describes elapsed input, never a position supplied by the client.
 export class PredictedMotion {
-  constructor(){this.epoch=-1;this.seq=0;this.pending=[];this.x=0;this.z=0;}
+  constructor(){this.epoch=-1;this.seq=0;this.pending=[];this.x=0;this.z=0;this.errorX=0;this.errorZ=0;}
   advance(code,mask,yaw,dt,hp,ammo){
     if(this.pending.length>=180 || dt<=0 || this.epoch<0)return;
     dt=Math.min(dt,.06);
@@ -38,11 +38,19 @@ export class PredictedMotion {
     }
   }
   reconcile(player,code,paused){
+    const beforeX=this.x,beforeZ=this.z,sameEpoch=this.epoch===player.epoch;
     const {epoch,ack}=player;
     if(this.epoch!==epoch || paused)this.pending=[];
     this.epoch=epoch;this.seq=Math.max(this.seq,ack);
     this.pending=this.pending.filter(s=>s.seq>ack);
     this.x=player.x;this.z=player.z;
     for(const s of this.pending)move(this,commandsFor(code,s.mask,player.hp,player.ammo),s.yaw,s.dt);
+    if(sameEpoch&&!paused&&Math.hypot(beforeX-this.x,beforeZ-this.z)<2){
+      this.errorX+=beforeX-this.x;this.errorZ+=beforeZ-this.z;
+    }else this.errorX=this.errorZ=0;
+  }
+  renderPosition(dt){
+    const decay=Math.exp(-14*dt);this.errorX*=decay;this.errorZ*=decay;
+    return {x:this.x+this.errorX,z:this.z+this.errorZ};
   }
 }

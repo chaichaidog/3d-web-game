@@ -6,6 +6,8 @@ export class GunFeedback {
     if(player.epoch!==this.epoch||player.weapon!==this.weapon){
       this.predicted=player.shot;this.next=0;this.kick=0;this.velocity=0;
     }
+    if(player.reload>0&&!(this.reload>0))this.predicted=player.shot;
+    this.reload=player.reload;
     this.epoch=player.epoch;this.weapon=player.weapon;this.predicted=Math.max(this.predicted,player.shot);
   }
   update(dt,now,player,code,mask,enabled){

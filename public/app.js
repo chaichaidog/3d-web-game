@@ -1,5 +1,7 @@
 import {actions,sensors,weapons,safe,fresh,clamp,program} from './rules.js';
-import {cover,scene,localShot} from './view.js';
+import {cover,scene,localShot,setQuality} from './view.js';
+import {LiveConnection} from './network.js';
+import {SnapshotTimeline} from './timeline.js';
 import {inputMask,PredictedMotion} from './motion.js';
 import {GunFeedback,unlockAudio,setSound,sound} from './feedback.js';
 import {fieldHint,blockHint} from './lesson.js';
@@ -7,8 +9,15 @@ const $=id=>document.getElementById(id);
 const make=(tag,txt,cls)=>{const el=document.createElement(tag);if(txt!==undefined)el.textContent=txt;if(cls)el.className=cls;return el;};
 let session=null,state=null,prev=null,stamp=0,me=null,yaw=0,pitch=0,tap=false,draft=fresh(),active=fresh(),cmdQueue=Promise.resolve(),toastTimer,clock=0,networkError=false;
 const held=new Set(), panels=$('panel'), world=$('world'), cards=new Map();
+const previewVisibility=new IntersectionObserver(entries=>{for(const e of entries){const card=cards.get(e.target.dataset.player);if(card)card.visible=e.isIntersecting;}});
 const motion=new PredictedMotion();
 const gun=new GunFeedback();
+const timeline=new SnapshotTimeline();
+let connection=null,lastHud=0,lastDraw=0,draws=0,perfAt=0,quality='auto';
+const qualityButton=make('button','畫質：自動');
+qualityButton.onclick=()=>{quality=quality==='auto'?'low':quality==='low'?'high':'auto';setQuality(quality);qualityButton.textContent='畫質：'+({auto:'自動',low:'流暢',high:'精細'}[quality]);};
+const performanceLabel=make('span','測量流暢度中…','performance');performanceLabel.id='performance';
+$('game').querySelector('nav').append(qualityButton,performanceLabel);
 let shotTap=false,hitUntil=0,confirmedHits=0,audioOn=true;
 const soundButton=make('button','音效開');
 soundButton.onclick=()=>{audioOn=!audioOn;setSound(audioOn);soundButton.textContent=audioOn?'音效開':'音效關';};
@@ -44,6 +53,7 @@ $('resumeGuide').onclick=()=>{guideHidden=false;sessionStorage.removeItem('outpo
 function notify(msg){$('toast').textContent=msg;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').textContent='',3000);}
 function message(msg){const el=$('panelMessage');if(panels.open&&el)el.textContent=msg;else notify(msg);}
 async function api(name,body={}){
+  if(connection&&name!=='create'&&name!=='join')return connection.call(name,body);
   const res=await fetch('/api/'+name,{method:'POST',headers:{'Content-Type':'application/json',...(session?{Authorization:'Bearer '+session.token}:{})},body:JSON.stringify(body),signal:AbortSignal.timeout(6000)});
   const data=await res.json();if(!res.ok){const err=Error(data.error||'連線失敗');err.status=res.status;throw err;}return data;
 }
@@ -64,14 +74,22 @@ async function enter(s){
   if(s.teacher)$('roomTitle').textContent='房號　'+s.code;
   $('status').textContent=(s.teacher?'老師指揮台':'學生連線中')+' ／ '+s.code;
   const leave=make('button','離開教室','link');leave.onclick=()=>{if(confirm('離開此分頁的角色？重新整理可繼續目前角色。')){sessionStorage.removeItem('outpost.session');location.reload();}};document.querySelector('header').append(leave);
-  await sync();requestAnimationFrame(frame);
+  connection=new LiveConnection(s,receiveState,connected=>{
+    networkError=!connected;
+    $('status').textContent=(connected?(s.teacher?'老師指揮台':'學生連線中'):'正在重新連線…')+' ／ '+s.code;
+    if(!connected)resetKeys();
+  },()=>{sessionStorage.removeItem('outpost.session');location.reload();});
+  setInterval(sendInput,33);
+  requestAnimationFrame(frame);
 }
-async function sync(){
-  if(!session)return;
-  try{
-    const clicked=tap;tap=false;
-    const s=await api('sync',{keys:[...held],tap:clicked,yaw,pitch,editor:panels.open,epoch:motion.epoch,steps:motion.pending.slice()});
+function sendInput(){
+  if(!session||!connection)return;
+  sampleMovement(performance.now());
+  if(connection.input({keys:[...held],tap,yaw,pitch,editor:panels.open,epoch:motion.epoch,steps:motion.pending}))tap=false;
+}
+function receiveState(s,serverTime){
     const now=performance.now();if(stamp)interval=clamp(interval*.45+(now-stamp)*.55,45,500);
+    timeline.push(s,serverTime,now);
     prev=state;state=s;stamp=now;me=s.players.find(p=>p.id===session.id);
     if(me){
       if(!prev){yaw=me.yaw;pitch=me.pitch;}
@@ -80,15 +98,9 @@ async function sync(){
       if(prev&&me.hit>confirmedHits){hitUntil=performance.now()+180;sound('hit',me.weapon);}
       confirmedHits=me.hit;
       if(!walked&&(me.walked||Math.hypot(me.x,me.z)>.55)){walked=true;sessionStorage.setItem('outpost.walked.'+session.id,'yes');}
-      refreshGuide();
     }
     if(networkError){networkError=false;$('status').textContent='已重新連線 ／ '+s.code;}
-    if(session.teacher)monitor();else if(me)hud();
-  }catch(err){
-    if(err.status===401){sessionStorage.removeItem('outpost.session');location.reload();return;}
-    networkError=true;$('status').textContent='連線中斷，正在重連…';held.clear();
-  }
-  setTimeout(sync,session?.teacher?280:40);
+    if(now-lastHud>180){lastHud=now;if(session.teacher)monitor();else if(me){hud();refreshGuide();}}
 }
 const phaseLabel={ready:'準備中',active:'交戰中',paused:'已暫停',clear:'本波完成',lost:'可重試'};
 function hud(){
@@ -100,50 +112,49 @@ function hud(){
 }
 function frame(now){
   if(!session)return;const dt=clamp((now-clock)/1000,0,.05);clock=now;
-  if(session.teacher&&state&&!document.hidden&&now-lastPreview>=(cards.size>4?80:50)){
+  if(session.teacher&&state&&!document.hidden&&now-lastPreview>=160){
     lastPreview=now;const view=betweenSnapshots(now);
-    for(const p of view.players){const card=cards.get(p.id);if(card&&p.online)scene(card.c,view,p);}
+    for(const p of view.players){const card=cards.get(p.id);if(card&&p.online&&card.visible)scene(card.c,view,p);}
   }
   if(!session.teacher&&me&&!document.hidden&&!panels.open){
     if(held.has('arrowleft'))yaw-=dt*1.8;if(held.has('arrowright'))yaw+=dt*1.8;
     sampleMovement(now);
     animateGun(dt,now/1000);
-    $('reticle').textContent=now<hitUntil?'✳':'＋';
-    $('reticle').style.transform='translate(-50%,-50%) scale('+(1+gun.kick*.35)+')';
-    scene(world,betweenSnapshots(now),{...me,x:motion.x,z:motion.z},{yaw,pitch,kick:gun.kick,lastFire:gun.lastFire});
-    if(world.dataset.error){$('task').textContent=world.dataset.error;}
+    const camera=motion.renderPosition(dt);
+    if(now-lastDraw>=15){
+      const gap=now-lastDraw;lastDraw=now;draws++;
+      const mark=now<hitUntil?'✳':'＋';if($('reticle').textContent!==mark)$('reticle').textContent=mark;
+      $('reticle').style.transform='translate(-50%,-50%) scale('+(1+gun.kick*.35)+')';
+      scene(world,betweenSnapshots(now),{...me,...camera},{yaw,pitch,kick:gun.kick,lastFire:gun.lastFire,frameMs:gap});
+      if(world.dataset.error)$('task').textContent=world.dataset.error;
+    }
+    if(now-perfAt>1500){
+      const fps=Math.round(draws*1000/(now-perfAt));draws=0;perfAt=now;
+      performanceLabel.textContent=fps+' FPS · 連線 '+Math.round(connection?.rtt||0)+' ms';
+      world.dataset.fps=String(fps);
+    }
   }
   requestAnimationFrame(frame);
 }
 function betweenSnapshots(now){
-  if(!prev)return state;
-  const t=clamp((now-stamp)/interval,0,1);
-  function blend(p,b){
-    if(!b||p.epoch!==b.epoch||Math.hypot(p.x-b.x,p.z-b.z)>4)return p;
-    const result={...p,x:b.x+(p.x-b.x)*t,z:b.z+(p.z-b.z)*t};
-    if(Number.isFinite(p.yaw)){
-      const angle=p.yaw-b.yaw;result.yaw=b.yaw+Math.atan2(Math.sin(angle),Math.cos(angle))*t;
-      result.pitch=b.pitch+(p.pitch-b.pitch)*t;
-    }
-    return result;
-  }
-  return {...state,enemies:state.enemies.map(e=>blend(e,prev.enemies.find(b=>b.id===e.id))),players:state.players.map(p=>blend(p,prev.players.find(b=>b.id===p.id)))};
+  return state?.phase==='paused'?state:timeline.sample(now,session.teacher?220:100)||state;
 }
-function resetKeys(){motionTime=performance.now();held.clear();tap=false;moveTap=false;shotTap=false;}
+function resetKeys(){motionTime=performance.now();held.clear();tap=false;moveTap=false;shotTap=false;sendInput();}
 window.addEventListener('blur',resetKeys);document.addEventListener('visibilitychange',resetKeys);
 window.addEventListener('keydown',e=>{
   if(!me)return;const k=e.key.toLowerCase();
   if(k==='tab'&&!e.repeat&&!panels.open){e.preventDefault();openPanel('blocks');return;}
   if(panels.open)return;
-  if(['arrowleft','arrowright','shift','w','a','s','d','r','q'].includes(k)){e.preventDefault();if(!held.has(k)){sampleMovement(performance.now());held.add(k);}}
-});window.addEventListener('keyup',e=>{const k=e.key.toLowerCase();if(held.has(k)){sampleMovement(performance.now());held.delete(k);}});
+  if(['arrowleft','arrowright','shift','w','a','s','d','r','q'].includes(k)){e.preventDefault();if(!held.has(k)){sampleMovement(performance.now());held.add(k);sendInput();}}
+});window.addEventListener('keyup',e=>{const k=e.key.toLowerCase();if(held.has(k)){sampleMovement(performance.now());held.delete(k);sendInput();}});
 world.addEventListener('mousedown',e=>{
   if(e.button!==0)return;
   unlockAudio();held.add('mouse');tap=true;moveTap=true;shotTap=true;world.focus();
   animateGun(0,performance.now()/1000);
+  sendInput();
   if(!document.pointerLockElement)world.requestPointerLock?.()?.catch?.(()=>{});
 });
-window.addEventListener('mouseup',()=>held.delete('mouse'));
+window.addEventListener('mouseup',()=>{held.delete('mouse');sendInput();});
 document.addEventListener('mousemove',e=>{if(document.pointerLockElement===world){yaw+=e.movementX*.0026;pitch=clamp(pitch-e.movementY*.0018,-.32,.32);}});
 document.addEventListener('pointerlockchange',()=>{if(!document.pointerLockElement)resetKeys();});
 function openPanel(kind){
@@ -216,7 +227,7 @@ function monitor(){
   $('waveBtn').disabled=!state.players.length||['paused','active'].includes(state.phase);$('waveBtn').textContent=state.phase==='lost'?'重試本波':'開始下一波';
   if(!state.players.length)$('cards').textContent='等學生輸入房號加入…';
   for(const p of state.players){
-    if(!cards.has(p.id)){if(!cards.size)$('cards').replaceChildren();const card=make('article',undefined,'card'),name=make('h3'),c=make('canvas'),meta=make('p'),b=make('pre');card.append(name,c,meta,b);$('cards').append(card);cards.set(p.id,{name,c,meta,b});}
+    if(!cards.has(p.id)){if(!cards.size)$('cards').replaceChildren();const card=make('article',undefined,'card'),name=make('h3'),c=make('canvas'),meta=make('p'),b=make('pre');card.append(name,c,meta,b);$('cards').append(card);cards.set(p.id,{name,c,meta,b,visible:true});c.dataset.player=p.id;previewVisibility.observe(c);}
     const ui=cards.get(p.id);ui.name.textContent=(p.help?'✋ ':'')+p.name+(p.online?'':' · 離線');
     ui.meta.textContent=(p.editor?'正在準備':'遊戲中')+'　♥ '+p.hp+'　◈ '+p.coins+'　'+weapons[p.weapon].name;
     ui.b.textContent='目前積木草稿\n'+listing(p.draft)+(JSON.stringify(p.draft)!==JSON.stringify(p.code)?'\n\n執行中版本\n'+listing(p.code):'');
