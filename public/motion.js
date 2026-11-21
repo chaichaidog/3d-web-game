@@ -1,4 +1,5 @@
 import {clamp} from './rules.js';
+import {moveWorld} from './world.js';
 
 // Both simulations use the student's running program, including custom key bindings.
 export const buttons = ['w','s','a','d','shift','mouse','r','q','click'];
@@ -22,8 +23,7 @@ export function move(point,commands,yaw,dt){
   if(!front&&!side)return false;
   const distance=(commands.has('sprint')?7:4.5)*dt/Math.hypot(front,side);
   const sin=Math.sin(yaw),cos=Math.cos(yaw);
-  point.x=clamp(point.x+(front*sin+side*cos)*distance,-23,23);
-  point.z=clamp(point.z+(front*cos-side*sin)*distance,-23,23);
+  moveWorld(point,(front*sin+side*cos)*distance,(front*cos-side*sin)*distance);
   return true;
 }
 

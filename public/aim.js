@@ -1,6 +1,7 @@
+import {wallDistance} from './world.js';
 export function traceShot(player,candidates,delta=0){
   const angle=player.yaw+delta,dx=Math.sin(angle),dz=Math.cos(angle);
-  let nearest=null,distance=45;
+  let nearest=null,distance=wallDistance(player.x,player.z,dx,dz,player.pitch);
   for(const obj of candidates){
     const ex=obj.x-player.x,ez=obj.z-player.z,along=ex*dx+ez*dz;
     const radius=obj.type==='boss'?.94:obj.type==='swarm'?.39:.52;

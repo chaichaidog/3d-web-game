@@ -2,13 +2,15 @@ import {randomUUID} from 'node:crypto';
 import {fresh,program,core,targets,weapons,safe,clamp,sensors} from './public/rules.js';
 import {inputMask,commandsFor,move} from './public/motion.js';
 import {traceShot} from './public/aim.js';
+import {WORLD_LIMIT,landmarks,blocked,moveWorld,wallDistance,pathTo} from './public/world.js';
+const routes=new WeakMap();
 export function room(code) {
   return {code, mode:'survival', phase:'ready', wave:0, coreHp:100, kills:0, players:new Map(), enemies:[], shots:[], fallen:[], message:'集合完畢後，老師可以開始第一波。', touched:Date.now()};
 }
 export function player(name){
   return {id:randomUUID(),name,x:0,z:0,yaw:0,pitch:0,hp:100,coins:0,weapon:'pulse',owned:['pulse'],ammo:12,kits:1,
     draft:fresh(),code:fresh(),keys:[],tap:false,editor:false,help:false,seen:Date.now(),delay:0,reload:0,hits:0,walked:false,gear:false,shot:0,hit:0,
-    ack:0,epoch:0,sampled:false,credit:.25,lastBudget:performance.now()};
+    discovered:[],ack:0,epoch:0,sampled:false,credit:.25,lastBudget:performance.now()};
 }
 export function cleanInput(p,data,paused=false){
   p.keys=Array.isArray(data.keys)?data.keys.filter(k=>Object.hasOwn(sensors,k)&&!['empty','low','click'].includes(k)).slice(0,12):[];
@@ -55,9 +57,10 @@ export function nextWave(r) {
   const retry=r.phase==='lost';
   if(!retry)r.wave++;
   r.phase='active';r.coreHp=100;r.enemies=[];r.fallen=[];r.shots=[];
-  const cacheAngle=(r.wave-1)*1.8+.7;
-  r.cache=r.mode==='survival'?{x:Math.sin(cacheAngle)*14,z:Math.cos(cacheAngle)*14,claimed:false}:null;
+  const site=landmarks[(r.wave-1)%landmarks.length];
+  r.cache=r.mode==='survival'?{x:site.x+2,z:site.z+2,claimed:false,name:site.name}:null;
   const count=Math.max(1,[...r.players.values()].filter(p=>Date.now()-p.seen<15000).length);
+  const roaming=r.mode==='survival'?[...r.players.values()].filter(p=>!safe(p.x,p.z)&&Date.now()-p.seen<5000):[];
   const bossWave=r.wave%5===0;
   const n=Math.min(24,2+count+Math.min(r.wave-1,8));
   for(let i=0;i<n+(bossWave?1:0);i++){
@@ -65,7 +68,15 @@ export function nextWave(r) {
     const type=boss?'boss':['walker','runner','brute','swarm'][(i%2===0?0:(r.wave-1)%4)];
     const a=(i+Math.random()*.5)/n*Math.PI*2;
     const hp={walker:28,runner:18,brute:65,swarm:14,boss:120+count*35}[type];
-    r.enemies.push({id:randomUUID(),type,hp,max:hp,x:Math.sin(a)*20,z:Math.cos(a)*20,yaw:a+Math.PI,hit:0,attack:0,cool:1,speed:{walker:1.5,runner:2.6,brute:1,swarm:2.1,boss:1.3}[type]});
+    const anchor=roaming[i%roaming.length]||{x:0,z:0};
+    let x=0,z=20;
+    for(let attempt=0;attempt<32;attempt++){
+      const angle=a+attempt*.63;
+      x=clamp(anchor.x+Math.sin(angle)*20,-WORLD_LIMIT+2,WORLD_LIMIT-2);
+      z=clamp(anchor.z+Math.cos(angle)*20,-WORLD_LIMIT+2,WORLD_LIMIT-2);
+      if(!blocked(x,z,.65)&&!safe(x,z)&&Math.hypot(x-anchor.x,z-anchor.z)>10)break;
+    }
+    r.enemies.push({id:randomUUID(),type,hp,max:hp,x,z,yaw:a+Math.PI,hit:0,attack:0,cool:1,speed:{walker:1.5,runner:2.6,brute:1,swarm:2.1,boss:1.3}[type]});
   }
   r.message=bossWave?'警報！巨型感染者進場':'第 '+r.wave+' 波開始';
 }
@@ -112,7 +123,14 @@ export function tick(r,dt){
   if(r.phase==='paused'){for(const p of r.players.values())p.tap=false;return;}
   r.shots=r.shots.filter(s=>(s.t-=dt)>0);
   r.fallen=r.fallen.filter(s=>(s.t-=dt)>0);
-  for(const p of r.players.values())runPlayer(r,p,dt);
+  for(const p of r.players.values()){
+    runPlayer(r,p,dt);
+    if(r.mode==='survival'&&Date.now()-p.seen<1800)for(const site of landmarks){
+      if(Math.hypot(p.x-site.x,p.z-site.z)<3&&!p.discovered.includes(site.id)){
+        p.discovered.push(site.id);p.coins+=2;
+      }
+    }
+  }
   if(r.phase!=='active')return;
   if(!r.enemies.length){r.phase='clear';r.message='本波完成！回基地補給，再挑戰下一波。';return;}
   const outside=[...r.players.values()].filter(p=>!safe(p.x,p.z)&&Date.now()-p.seen<5000);
@@ -126,16 +144,26 @@ export function tick(r,dt){
     if(!target)continue;
     e.yaw=Math.atan2(target.x-e.x,target.z-e.z);
     e.cool-=dt;
-    if(best<1.65){
+    const obstructed=best>0&&wallDistance(e.x,e.z,(target.x-e.x)/best,(target.z-e.z)/best,0,best,.36)<best;
+    if(best<1.65&&!obstructed){
       if(e.cool<=0){e.cool=1.2;e.attack=(e.attack||0)+1;const hurt=e.type==='boss'?18:6;
         if(target===core)r.coreHp=Math.max(0,r.coreHp-hurt);
         else {target.hp-=hurt;if(target.hp<=0)home(target);}
       }
     }else{
-      const vx=(target.x-e.x)/best,vz=(target.z-e.z)/best;
+      let waypoint=target;
+      if(obstructed){
+        let route=routes.get(e);
+        if(!route||route.age>1.5||Math.hypot(route.x-target.x,route.z-target.z)>3){route={points:pathTo(e,target),x:target.x,z:target.z,age:0};routes.set(e,route);}
+        route.age+=dt;
+        while(route.points.length&&Math.hypot(e.x-route.points[0].x,e.z-route.points[0].z)<.8)route.points.shift();
+        waypoint=route.points[0]||target;
+      }else routes.delete(e);
+      const length=Math.hypot(waypoint.x-e.x,waypoint.z-e.z)||1;
+      const vx=(waypoint.x-e.x)/length,vz=(waypoint.z-e.z)/length;
       let nx=e.x+vx*e.speed*dt,nz=e.z+vz*e.speed*dt;
       if(safe(nx,nz)){const a=Math.atan2(e.z,e.x),dir=e.x*vz-e.z*vx>=0?1:-1; nx=5.05*Math.cos(a+dir*e.speed*dt/5);nz=5.05*Math.sin(a+dir*e.speed*dt/5);}
-      e.x=nx;e.z=nz;
+      moveWorld(e,nx-e.x,nz-e.z,.35);
     }
   }
   if(!r.coreHp){r.phase='lost';r.enemies=[];r.message='發電機離線。補給後可重試本波。';}
@@ -145,7 +173,7 @@ export function snapshot(r,id,teacher=false){
     players:[...r.players.values()].map(p=>{
       const {id:pid,name,x,z,yaw,pitch,hp,weapon,shot,hit,editor,help}=p;
       const basic={id:pid,name,x,z,yaw,pitch,hp,weapon,shot,hit,editor,help,online:Date.now()-p.seen<5000};
-      if(pid===id||teacher)Object.assign(basic,{epoch:p.epoch,ack:p.ack,coins:p.coins,kits:p.kits,owned:p.owned,ammo:p.ammo,reload:p.reload,walked:p.walked,hits:p.hits,gear:p.gear});
+      if(pid===id||teacher)Object.assign(basic,{epoch:p.epoch,ack:p.ack,coins:p.coins,kits:p.kits,owned:p.owned,ammo:p.ammo,reload:p.reload,walked:p.walked,hits:p.hits,gear:p.gear,discovered:p.discovered});
       if(teacher)Object.assign(basic,{draft:p.draft,code:p.code});
       return basic;
     })};

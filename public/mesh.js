@@ -20,7 +20,7 @@ export function cameraMatrix(x,y,z,yaw,pitch,aspect){
   const right=[cy,0,-sy],up=[-sy*sp,cp,-cy*sp],forward=[sy*cp,sp,cy*cp];
   const v=new Float32Array([right[0],up[0],forward[0],0,right[1],up[1],forward[1],0,right[2],up[2],forward[2],0,
     -(right[0]*x+right[2]*z),-(up[0]*x+up[1]*y+up[2]*z),-(forward[0]*x+forward[1]*y+forward[2]*z),1]);
-  const f=1/Math.tan(Math.PI*64/360),near=.04,far=95;
+  const f=1/Math.tan(Math.PI*64/360),near=.04,far=125;
   const p=new Float32Array([f/aspect,0,0,0,0,f,0,0,0,0,(far+near)/(far-near),1,0,0,-2*far*near/(far-near),0]);
   return multiply(p,v);
 }
@@ -117,7 +117,7 @@ export class Renderer{
       in vec3 worldPosition;
       uniform vec3 eye;
       out vec4 result;
-      void main(){float fog=smoothstep(24.,85.,length(worldPosition-eye));result=vec4(mix(vColor.rgb,vec3(.36,.43,.49),fog),vColor.a);}
+      void main(){float fog=smoothstep(45.,105.,length(worldPosition-eye));result=vec4(mix(vColor.rgb,vec3(.36,.43,.49),fog),vColor.a);}
     `);
     this.program=gl.createProgram();gl.attachShader(this.program,vertex);gl.attachShader(this.program,fragment);gl.linkProgram(this.program);
     if(!gl.getProgramParameter(this.program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(this.program));

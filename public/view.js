@@ -2,6 +2,7 @@ import {Renderer,identity,transform,multiply,cameraMatrix,rendererQuality} from 
 import {part,joint,character,weapon,muzzle,landscape} from './models.js';
 import {core,targets,weapons} from './rules.js';
 import {traceShot} from './aim.js';
+import {landmarks} from './world.js';
 export {cover} from './cover.js';
 export const setQuality=rendererQuality;
 
@@ -67,6 +68,14 @@ function labels(v,canvas,state,me,matrix){
     Object.assign(label.style,{left:canvas.offsetLeft+'px',top:canvas.offsetTop+'px',width:w+'px',height:h+'px'});
   }
   const g=label.getContext('2d');g.clearRect(0,0,w,h);g.textAlign='center';g.font='600 12px "Microsoft JhengHei",sans-serif';
+  if(canvas.id==='world')for(const site of landmarks){
+    const distance=Math.hypot(site.x-me.x,site.z-me.z);if(distance>80)continue;
+    const q=[site.x,3.5,site.z,1],projected=[0,1,2,3].map(row=>q.reduce((sum,n,col)=>sum+n*matrix[col*4+row],0));
+    if(projected[3]<.2)continue;
+    const x=w*(.5+projected[0]/projected[3]/2),y=h*(.5-projected[1]/projected[3]/2);
+    const name=(me.discovered?.includes(site.id)?'✓ ':'◇ ')+site.name+' · '+Math.round(distance)+' m';
+    g.lineWidth=4;g.strokeStyle='#263746';g.strokeText(name,x,y);g.fillStyle=site.tint;g.fillText(name,x,y);
+  }
   for(const p of [...state.enemies,...state.players.filter(p=>p.online&&p.id!==me.id)]){
     const height=p.type==='boss'?3.85:p.type==='swarm'?1.65:2.15;
     const q=[p.x,height,p.z,1],projected=[0,1,2,3].map(row=>q.reduce((sum,n,col)=>sum+n*matrix[col*4+row],0));
@@ -83,7 +92,7 @@ export function scene(canvas,state,me,view=me,first=true){
   try{v=getView(canvas);}catch(err){canvas.dataset.error=err.message;canvas.setAttribute('aria-label',err.message);return;}
   if(canvas.id==='world')v.renderer.adapt(view.frameMs||16);
   const now=performance.now()/1000,dt=state.phase==='paused'?0:Math.min(now-v.last,.08);v.last=now;v.time+=dt;
-  const out=scenery.slice(),root=identity();
+  const out=scenery.filter(chunk=>Math.hypot(chunk.x-me.x,chunk.z-me.z)<70+chunk.radius),root=identity();
   for(const t of targets){
     part(out,root,'cylinder',t.x,.55,t.z,.09,1.1,.09,'#7c817d');
     part(out,root,'cylinder',t.x,1.35,t.z,.95,.06,.95,'#a38470',Math.PI/2);

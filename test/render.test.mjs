@@ -21,8 +21,9 @@ test('models have finite triangles and articulated poses change their limb trans
     assert.ok(gun.reduce((n,p)=>n+meshVertices(p.kind).length,0)>3000);
     assert.ok(gun.every(p=>[...p.matrix,...meshVertices(p.kind)].every(Number.isFinite)));
   }
-  const map=landscape();assert.equal(map.length,1);
-  assert.equal(meshVertices(map[0].kind),meshVertices(landscape()[0].kind),'scene geometry is reused');
+  const map=landscape();assert.ok(map.length>4,'districts should be separate meshes for distance culling');
+  assert.equal(map,landscape(),'scene geometry is reused');
+  for(const chunk of map)assert.ok(meshVertices(chunk.kind).every(Number.isFinite));
 });
 test('camera faces the same direction as the server hitscan for yaw and pitch',()=>{
   for(const yaw of [0,Math.PI/2,-Math.PI,1.8])for(const pitch of [-.2,0,.2]){

@@ -5,10 +5,13 @@ import {SnapshotTimeline} from './timeline.js';
 import {inputMask,PredictedMotion} from './motion.js';
 import {GunFeedback,unlockAudio,setSound,sound} from './feedback.js';
 import {fieldHint,blockHint} from './lesson.js';
+import {Navigation} from './navigation.js';
 const $=id=>document.getElementById(id);
 const make=(tag,txt,cls)=>{const el=document.createElement(tag);if(txt!==undefined)el.textContent=txt;if(cls)el.className=cls;return el;};
 let session=null,state=null,prev=null,stamp=0,me=null,yaw=0,pitch=0,tap=false,draft=fresh(),active=fresh(),cmdQueue=Promise.resolve(),toastTimer,clock=0,networkError=false;
 const held=new Set(), panels=$('panel'), world=$('world'), cards=new Map();
+const navigation=new Navigation(world.parentElement);
+$('game').querySelector('nav').append(navigation.select);
 const previewVisibility=new IntersectionObserver(entries=>{for(const e of entries){const card=cards.get(e.target.dataset.player);if(card)card.visible=e.isIntersecting;}});
 const motion=new PredictedMotion();
 const gun=new GunFeedback();
@@ -96,6 +99,8 @@ function receiveState(s,serverTime){
       if(!prev){yaw=me.yaw;pitch=me.pitch;}
       motion.reconcile(me,active,state.phase==='paused');
       gun.sync(me);
+      const earlier=prev?.players.find(p=>p.id===session.id);
+      if(earlier&&(me.discovered?.length||0)>(earlier.discovered?.length||0))notify('發現新區域！+2 金幣 · 探索 '+me.discovered.length+'/4');
       if(prev&&me.hit>confirmedHits){hitUntil=performance.now()+180;sound('hit',me.weapon);}
       confirmedHits=me.hit;
       if(!walked&&(me.walked||Math.hypot(me.x,me.z)>.55)){walked=true;sessionStorage.setItem('outpost.walked.'+session.id,'yes');}
@@ -107,8 +112,9 @@ const phaseLabel={ready:'準備中',active:'交戰中',paused:'已暫停',clear:
 function hud(){
   const isSafe=safe(me.x,me.z);
   $('hud').textContent=(isSafe?'安全區':'野外')+'　♥ '+me.hp+'　◈ '+me.coins+'　'+weapons[me.weapon].name+'　'+(me.reload>0?'換彈中':me.ammo+'/'+weapons[me.weapon].cap);
-  const mission=!me.walked?'走出基地光圈':!me.hits?'命中任一練習靶':!state.kills?'和全隊擊敗一隻殭屍':!me.gear?'回商店買一把新武器':'自由挑戰：加入自動換彈或衝刺';
-  $('task').textContent=(guideHidden||me.hits?'任務　'+mission+'　｜　':'')+'第 '+state.wave+' 波 · '+phaseLabel[state.phase]+(state.mode==='defense'?'　發電機 '+state.coreHp+'%':state.cache&&state.phase==='active'?(state.cache.claimed?'　已取得補給':'　野外補給 '+Math.round(Math.hypot(me.x-state.cache.x,me.z-state.cache.z))+' m'):'');
+  const exploring=state.mode==='survival'&&state.phase!=='active'&&(me.discovered?.length||0)<4;
+  const mission=!me.walked?'走出基地光圈':!me.hits?'命中任一練習靶':exploring?'沿地圖找集合點，探索 '+(me.discovered?.length||0)+'/4':!state.kills?'和全隊擊敗一隻殭屍':!me.gear?'回商店買一把新武器':'自由挑戰：加入自動換彈或衝刺';
+  $('task').textContent=(guideHidden||me.hits?'任務　'+mission+'　｜　':'')+'第 '+state.wave+' 波 · '+phaseLabel[state.phase]+(state.mode==='defense'?'　發電機 '+state.coreHp+'%':state.cache&&state.phase==='active'?(state.cache.claimed?'　已取得補給':'　'+state.cache.name+'補給 '+Math.round(Math.hypot(me.x-state.cache.x,me.z-state.cache.z))+' m'):'');
   $('shopBtn').disabled=$('editBtn').disabled=!isSafe;$('helpBtn').textContent=me.help?'收回舉手':'舉手求助';
 }
 function frame(now){
@@ -122,6 +128,7 @@ function frame(now){
     sampleMovement(now);
     animateGun(dt,now/1000);
     const camera=motion.renderPosition(dt);
+    navigation.update(state,{...me,...camera,yaw});
     if(now-lastDraw>=15){
       const gap=now-lastDraw;lastDraw=now;draws++;
       const mark=now<hitUntil?'✳':'＋';if($('reticle').textContent!==mark)$('reticle').textContent=mark;
