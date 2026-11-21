@@ -84,6 +84,7 @@ export function meshVertices(kind){
 let quality='auto';
 export function rendererQuality(value){quality=value;}
 export class Renderer{
+  get detailDistance(){return quality==='low'?49:70;}
   constructor(canvas){
     this.canvas=canvas;this.scale=.9;this.frames=0;this.slow=0;
     this.gl=canvas.getContext('webgl2',{antialias:false,alpha:false,powerPreference:'high-performance'});
@@ -152,7 +153,7 @@ export class Renderer{
   }
   resize(){
     const c=this.canvas;
-    const r=c.id==='world'?Math.min(quality==='high'?1.2:quality==='low'?.6:this.scale,1440/c.clientWidth):Math.min(.7,420/c.clientWidth);
+    const r=c.id==='world'?Math.min(quality==='high'?1.2:quality==='low'?.55:this.scale,(quality==='low'?960:1440)/c.clientWidth):Math.min(.7,420/c.clientWidth);
     const w=Math.max(1,Math.round(c.clientWidth*r)),h=Math.max(1,Math.round(c.clientHeight*r));
     if(c.width!==w||c.height!==h){c.width=w;c.height=h;}
   }

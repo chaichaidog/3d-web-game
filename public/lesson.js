@@ -7,7 +7,7 @@ export function fieldHint(code,me,walked){
   if(!walked)return {stage:'1 / 3',title:'試走第一步',text:'關閉積木後，按住鍵盤 W 一下。看看前面的練習靶有沒有靠近。'};
   if(!hasFire(code))return {stage:'2 / 3',title:'幫滑鼠接上射擊',text:safe(me.x,me.z)?'走路成功！保留 W，再加一條「滑鼠左鍵按住」的規則。':'走路成功！先返回基地，才能替滑鼠加上射擊。',action:safe(me.x,me.z)?'edit':'home'};
   if(!me.hits)return {stage:'3 / 3',title:'命中第一個練習靶',text:safe(me.x,me.z)?'朝正前方的練習靶按住 W。畫面左上變成「野外」時放手，安全區內不能開槍。':'點遊戲畫面，把十字準星對準有靶心的牌子，按住左鍵。Esc 可以放開滑鼠。'};
-  return {stage:'3 / 3　✓',title:'打靶成功！',text:'想探索就從下方選一個目的地，跟著小地圖走。回基地可以接上 S、A、D，讓角色能倒退或往左右走。'};
+  return {stage:'3 / 3　✓',title:'打靶成功！',text:'想再試一次就挑戰練習殭屍，也可以選探索目的地，看看各地有什麼能幫到隊友。'};
 }
 export function blockHint(draft,active,walked){
   const shooting=hasWalk(active)&&walked;

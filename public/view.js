@@ -3,6 +3,7 @@ import {part,joint,character,weapon,muzzle,landscape} from './models.js';
 import {core,targets,weapons} from './rules.js';
 import {traceShot} from './aim.js';
 import {landmarks} from './world.js';
+import {availableActivities,claimedBy,isPracticeVisible} from './activities.js';
 export {cover} from './cover.js';
 export const setQuality=rendererQuality;
 
@@ -13,8 +14,10 @@ function getView(canvas){
 }
 export function localShot(canvas,state,player){
   const v=getView(canvas),now=performance.now()/1000,spread=weapons[player.weapon].spread;
+  const enemies=state.enemies.filter(enemy=>isPracticeVisible(enemy,player));
+  const candidates=player.practicing?enemies:[...enemies,...targets];
   for(const delta of spread?[-spread,0,spread]:[0]){
-    const {nearest,...ray}=traceShot(player,[...state.enemies,...targets],delta);
+    const {nearest,...ray}=traceShot(player,candidates,delta);
     v.traces.push({...ray,born:now,local:true,yaw:player.yaw});
   }
 }
@@ -73,10 +76,10 @@ function labels(v,canvas,state,me,matrix){
     const q=[site.x,3.5,site.z,1],projected=[0,1,2,3].map(row=>q.reduce((sum,n,col)=>sum+n*matrix[col*4+row],0));
     if(projected[3]<.2)continue;
     const x=w*(.5+projected[0]/projected[3]/2),y=h*(.5-projected[1]/projected[3]/2);
-    const name=(me.discovered?.includes(site.id)?'✓ ':'◇ ')+site.name+' · '+Math.round(distance)+' m';
+    const name=(site.id==='town'&&state.activities?.town?'✦ ':me.discovered?.includes(site.id)?'✓ ':'◇ ')+site.name+' · '+Math.round(distance)+' m';
     g.lineWidth=4;g.strokeStyle='#263746';g.strokeText(name,x,y);g.fillStyle=site.tint;g.fillText(name,x,y);
   }
-  for(const p of [...state.enemies,...state.players.filter(p=>p.online&&p.id!==me.id)]){
+  for(const p of [...state.enemies.filter(e=>isPracticeVisible(e,me)),...state.players.filter(p=>p.online&&p.id!==me.id)]){
     const height=p.type==='boss'?3.85:p.type==='swarm'?1.65:2.15;
     const q=[p.x,height,p.z,1],projected=[0,1,2,3].map(row=>q.reduce((sum,n,col)=>sum+n*matrix[col*4+row],0));
     if(projected[3]<.1)continue;
@@ -92,8 +95,9 @@ export function scene(canvas,state,me,view=me,first=true){
   try{v=getView(canvas);}catch(err){canvas.dataset.error=err.message;canvas.setAttribute('aria-label',err.message);return;}
   if(canvas.id==='world')v.renderer.adapt(view.frameMs||16);
   const now=performance.now()/1000,dt=state.phase==='paused'?0:Math.min(now-v.last,.08);v.last=now;v.time+=dt;
-  const out=scenery.filter(chunk=>Math.hypot(chunk.x-me.x,chunk.z-me.z)<70+chunk.radius),root=identity();
-  for(const t of targets){
+  const drawDistance=v.renderer.detailDistance;
+  const out=scenery.filter(chunk=>Math.hypot(chunk.x-me.x,chunk.z-me.z)<drawDistance+chunk.radius),root=identity();
+  if(!me.practicing&&Math.hypot(me.x,me.z-8)<drawDistance)for(const t of targets){
     part(out,root,'cylinder',t.x,.55,t.z,.09,1.1,.09,'#7c817d');
     part(out,root,'cylinder',t.x,1.35,t.z,.95,.06,.95,'#a38470',Math.PI/2);
     part(out,root,'cylinder',t.x,1.35,t.z-.037,.6,.012,.6,'#d0c4ac',Math.PI/2);
@@ -112,14 +116,35 @@ export function scene(canvas,state,me,view=me,first=true){
     part(out,root,'box',c.x,.85,c.z,1.35,.13,1,'#c0b18e');
     for(const s of [-1,1])part(out,root,'box',c.x+s*.4,.45,c.z-.46,.065,.9,.02,'#515f62');
   }
+  for(const site of availableActivities(state)){
+    if(Math.hypot(site.x-me.x,site.z-me.z)>drawDistance)continue;
+    const {x,z}=site,claimed=claimedBy(state,me,site);
+    if(site.kind==='lamp'){
+      part(out,root,'cylinder',x,1.8,z,.12,3.6,.12,'#44565e');
+      part(out,root,'box',x,3.6,z,.62,.52,.62,claimed?'#ffdc86':'#6d7d81',0,0,0,1,claimed?1:0);
+      if(claimed)part(out,root,'cylinder',x,6.3,z,.13,5.3,.13,'#f4d394',0,0,0,.5,1);
+    }else if(site.kind==='signal'){
+      part(out,root,'box',x,.6,z,.75,1.2,.6,'#384e5b');
+      part(out,root,'box',x,1.2,z,.9,.36,.65,'#748b91',-.24);
+      part(out,root,'box',x,1.32,z-.26,.61,.21,.03,claimed?'#91cab1':'#e7c87e',0,0,0,1,.6);
+    }else if(!claimed){
+      part(out,root,'box',x,.4,z,1.12,.8,.74,site.kind==='medical'?'#bfb89f':site.tint);
+      part(out,root,'box',x,.79,z,1.18,.13,.8,'#e7ca91');
+      if(site.kind==='medical'){
+        part(out,root,'box',x,.47,z-.38,.09,.3,.035,'#a05a50');
+        part(out,root,'box',x,.47,z-.39,.3,.09,.035,'#a05a50');
+      }
+    }
+  }
   const livingIds=new Set();
-  for(const e of state.enemies){livingIds.add(e.id);character(out,e,poseFor(v,e,dt));}
+  for(const e of state.enemies)if(isPracticeVisible(e,me)&&Math.hypot(e.x-me.x,e.z-me.z)<drawDistance){livingIds.add(e.id);character(out,e,poseFor(v,e,dt));}
   for(const p of state.players)if(p.id!==me.id&&p.online){
     livingIds.add(p.id);const pose=poseFor(v,p,dt);
     // Classmates share the spawn point; never put the camera inside their torso.
     if(Math.hypot(p.x-me.x,p.z-me.z)>.75)character(out,p,pose);
   }
   for(const e of state.fallen||[]){
+    if(!isPracticeVisible(e,me))continue;
     const pose=v.poses.get(e.id);
     if(!pose)continue;livingIds.add(e.id);
     const fall=1-e.t/.7,start=out.length;

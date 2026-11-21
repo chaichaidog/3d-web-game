@@ -3,7 +3,7 @@ import {randomInt,randomBytes,timingSafeEqual} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {resolve,extname} from 'node:path';
-import {room,player,edit,buy,cleanInput,control,home,snapshot,tick} from './game.mjs';
+import {room,player,edit,buy,cleanInput,control,home,snapshot,tick,interact,practice} from './game.mjs';
 import {realtime} from './realtime.mjs';
 
 const publicDir=fileURLToPath(new URL('./public/',import.meta.url));
@@ -57,6 +57,8 @@ function api(name,body,req){
     case 'shop':buy(p,body.item);break;
     case 'home':home(p);break;
     case 'help':p.help=Boolean(body.on);break;
+    case 'interact':return interact(r,p,body.site);
+    case 'practice':practice(r,p,body.cmd);break;
     default:fail('查無操作',404);
   }
   return {};

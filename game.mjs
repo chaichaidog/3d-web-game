@@ -3,14 +3,15 @@ import {fresh,program,core,targets,weapons,safe,clamp,sensors} from './public/ru
 import {inputMask,commandsFor,move} from './public/motion.js';
 import {traceShot} from './public/aim.js';
 import {WORLD_LIMIT,landmarks,blocked,moveWorld,wallDistance,pathTo} from './public/world.js';
+import {availableActivities,claimedBy,nearActivity,inPracticeLane} from './public/activities.js';
 const routes=new WeakMap();
 export function room(code) {
-  return {code, mode:'survival', phase:'ready', wave:0, coreHp:100, kills:0, players:new Map(), enemies:[], shots:[], fallen:[], message:'集合完畢後，老師可以開始第一波。', touched:Date.now()};
+  return {code, mode:'survival', phase:'ready', wave:0, coreHp:100, kills:0, players:new Map(), enemies:[], shots:[], fallen:[], activities:{}, teamNews:null, message:'集合完畢後，老師可以開始第一波。', touched:Date.now()};
 }
 export function player(name){
   return {id:randomUUID(),name,x:0,z:0,yaw:0,pitch:0,hp:100,coins:0,weapon:'pulse',owned:['pulse'],ammo:12,kits:1,
     draft:fresh(),code:fresh(),keys:[],tap:false,editor:false,help:false,seen:Date.now(),delay:0,reload:0,hits:0,walked:false,gear:false,shot:0,hit:0,
-    discovered:[],ack:0,epoch:0,sampled:false,credit:.25,lastBudget:performance.now()};
+    discovered:[],ammoCacheUsed:false,practice:null,practiceWins:0,ack:0,epoch:0,sampled:false,credit:.25,lastBudget:performance.now()};
 }
 export function cleanInput(p,data,paused=false){
   p.keys=Array.isArray(data.keys)?data.keys.filter(k=>Object.hasOwn(sensors,k)&&!['empty','low','click'].includes(k)).slice(0,12):[];
@@ -32,7 +33,38 @@ export function cleanInput(p,data,paused=false){
     if(!safe(p.x,p.z))p.walked=true;
   }
 }
-export function home(p){Object.assign(p,{epoch:p.epoch+1,x:0,z:0,hp:100,keys:[],tap:false,reload:0,ammo:weapons[p.weapon].cap});}
+export function home(p){Object.assign(p,{epoch:p.epoch+1,x:0,z:0,hp:100,keys:[],tap:false,practice:null,reload:0,ammo:weapons[p.weapon].cap});}
+export function interact(r,p,id){
+  const site=availableActivities(r).find(activity=>activity.id===id);
+  if(!site||r.phase==='paused'||!nearActivity(p,site))throw Error('先走近地圖上的互動點');
+  if(claimedBy(r,p,site))throw Error('這個互動點已經完成');
+  if(site.kind==='ammo'){
+    if(p.ammo===weapons[p.weapon].cap)throw Error('你的彈匣已經是滿的');
+    p.ammo=weapons[p.weapon].cap;p.reload=0;p.epoch++;p.ammoCacheUsed=true;
+    return {message:'彈匣補滿了！'};
+  }
+  r.activities[site.id]=p.name;
+  let message;
+  if(site.kind==='lamp')message=p.name+' 點亮了街區集合燈！';
+  if(site.kind==='signal')message=p.name+' 啟動了訊號站！小地圖上出現藏箱。';
+  if(site.kind==='medical'){
+    for(const buddy of r.players.values())buddy.kits++;
+    message=p.name+' 找到貨站醫療箱！全隊每人多 1 個醫療包。';
+  }
+  if(site.kind==='stash'){
+    for(const buddy of r.players.values())buddy.coins+=3;
+    message=p.name+' 打開訊號站藏箱！全隊每人獲得 3 枚金幣。';
+  }
+  r.teamNews={id:randomUUID(),message};
+  return {message};
+}
+export function practice(r,p,cmd){
+  if(cmd==='cancel'){p.practice=null;return;}
+  if(cmd!=='start'||r.phase!=='ready'||r.wave!==0||!p.hits)throw Error('先完成打靶，才能在第一波開始前練習');
+  if(!inPracticeLane(p))throw Error('回到基地北側的練習靶區再開始');
+  if(p.practice)return;
+  p.practice={id:randomUUID(),name:'練習殭屍',type:'walker',practiceOwner:p.id,hp:28,max:28,x:p.x,z:Math.max(15,p.z+6),yaw:Math.PI,hit:0};
+}
 export function edit(p,body,run){
   if(!safe(p.x,p.z)) throw Error('請先回到安全區');
   p.draft=program(body);
@@ -56,6 +88,7 @@ export function nextWave(r) {
   if(r.phase==='active'||r.phase==='paused')throw Error('請先完成本波');
   const retry=r.phase==='lost';
   if(!retry)r.wave++;
+  for(const p of r.players.values())p.practice=null;
   r.phase='active';r.coreHp=100;r.enemies=[];r.fallen=[];r.shots=[];
   const site=landmarks[(r.wave-1)%landmarks.length];
   r.cache=r.mode==='survival'?{x:site.x+2,z:site.z+2,claimed:false,name:site.name}:null;
@@ -85,6 +118,7 @@ export function control(r,cmd,mode){
   if(cmd==='pause'&&['paused','active'].includes(r.phase)){r.phase=r.phase==='active'?'paused':'active';for(const p of r.players.values())p.epoch++;return;}
   if(cmd==='recall'){for(const p of r.players.values())home(p);return;}
   if(cmd==='mode'&&['survival','defense'].includes(mode)){
+    for(const p of r.players.values())p.practice=null;
     r.mode=mode;r.wave=0;r.enemies=[];r.fallen=[];r.shots=[];r.cache=null;r.coreHp=100;r.phase='ready';r.message='已切換模式，裝備與積木已保留。';return;
   }
   throw Error('現在無法使用此操作');
@@ -93,7 +127,8 @@ function shoot(r,p) {
   if(p.reload>0||p.delay>0||p.ammo<=0||safe(p.x,p.z))return;
   const w=weapons[p.weapon];p.delay=w.delay;p.ammo--;p.shot++;
   for(const delta of w.spread?[-w.spread,0,w.spread]:[0]){
-    const {nearest,...ray}=traceShot(p,[...r.enemies,...targets],delta);
+    const candidates=p.practice?[p.practice]:[...r.enemies,...targets];
+    const {nearest,...ray}=traceShot(p,candidates,delta);
     const shot={...ray,id:p.id+':'+p.shot+':'+delta,owner:p.id,weapon:p.weapon,t:.8,impact:nearest?nearest.type?'enemy':'target':'none'};
     r.shots.push(shot);
     if(!nearest)continue;
@@ -101,6 +136,11 @@ function shoot(r,p) {
     if(!nearest.type){p.hits++;continue;}
     nearest.hp-=w.damage;nearest.hit=(nearest.hit||0)+1;
     if(nearest.hp<=0){
+      if(nearest.practiceOwner){
+        p.practice=null;p.practiceWins++;
+        r.fallen.push({...nearest,t:.7});shot.impact='defeat';
+        continue;
+      }
       r.enemies=r.enemies.filter(e=>e!==nearest);r.kills++;
       r.fallen.push({...nearest,t:.7});shot.impact='defeat';
       for(const buddy of r.players.values())buddy.coins+=nearest.type==='boss'?15:5;
@@ -124,6 +164,14 @@ export function tick(r,dt){
   r.shots=r.shots.filter(s=>(s.t-=dt)>0);
   r.fallen=r.fallen.filter(s=>(s.t-=dt)>0);
   for(const p of r.players.values()){
+    if(p.practice){
+      if(!inPracticeLane(p))p.practice=null;
+      else{
+        const enemy=p.practice,dx=p.x-enemy.x,dz=p.z-enemy.z,distance=Math.hypot(dx,dz);
+        enemy.yaw=Math.atan2(dx,dz);
+        if(distance>3){const step=Math.min(.85*dt,distance-3)/distance;moveWorld(enemy,dx*step,dz*step);}
+      }
+    }
     runPlayer(r,p,dt);
     if(r.mode==='survival'&&Date.now()-p.seen<1800)for(const site of landmarks){
       if(Math.hypot(p.x-site.x,p.z-site.z)<3&&!p.discovered.includes(site.id)){
@@ -169,11 +217,12 @@ export function tick(r,dt){
   if(!r.coreHp){r.phase='lost';r.enemies=[];r.message='發電機離線。補給後可重試本波。';}
 }
 export function snapshot(r,id,teacher=false){
-  return {code:r.code,mode:r.mode,phase:r.phase,wave:r.wave,coreHp:r.coreHp,kills:r.kills,message:r.message,cache:r.cache,enemies:r.enemies,shots:r.shots,fallen:r.fallen,
+  const training=[...r.players.values()].filter(p=>p.practice&&(teacher||p.id===id)).map(p=>p.practice);
+  return {code:r.code,mode:r.mode,phase:r.phase,wave:r.wave,coreHp:r.coreHp,kills:r.kills,message:r.message,cache:r.cache,activities:r.activities,teamNews:r.teamNews,enemies:[...r.enemies,...training],shots:r.shots,fallen:r.fallen.filter(e=>!e.practiceOwner||teacher||e.practiceOwner===id),
     players:[...r.players.values()].map(p=>{
       const {id:pid,name,x,z,yaw,pitch,hp,weapon,shot,hit,editor,help}=p;
       const basic={id:pid,name,x,z,yaw,pitch,hp,weapon,shot,hit,editor,help,online:Date.now()-p.seen<5000};
-      if(pid===id||teacher)Object.assign(basic,{epoch:p.epoch,ack:p.ack,coins:p.coins,kits:p.kits,owned:p.owned,ammo:p.ammo,reload:p.reload,walked:p.walked,hits:p.hits,gear:p.gear,discovered:p.discovered});
+      if(pid===id||teacher)Object.assign(basic,{epoch:p.epoch,ack:p.ack,coins:p.coins,kits:p.kits,owned:p.owned,ammo:p.ammo,reload:p.reload,walked:p.walked,hits:p.hits,gear:p.gear,discovered:p.discovered,ammoCacheUsed:p.ammoCacheUsed,practicing:Boolean(p.practice),practiceWins:p.practiceWins});
       if(teacher)Object.assign(basic,{draft:p.draft,code:p.code});
       return basic;
     })};

@@ -34,7 +34,7 @@ export function realtime(server,sessions,api){
           if(auth.p)cleanInput(auth.p,msg.data||{},auth.r.phase==='paused');
           if(Number.isFinite(msg.clientTime))ws.clientTime=msg.clientTime;
         }else if(msg.kind==='rpc'){
-          if(!['teacher','restore','draft','run','shop','home','help'].includes(msg.op))throw Error('Unknown operation');
+          if(!['teacher','restore','draft','run','shop','home','help','interact','practice'].includes(msg.op))throw Error('Unknown operation');
           const data=api(msg.op,msg.data||{},{headers:{authorization:'Bearer '+token},socket:req.socket});
           ws.send(JSON.stringify({kind:'reply',id:msg.id,data}));
         }

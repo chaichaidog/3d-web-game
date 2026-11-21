@@ -4,23 +4,51 @@ import {LiveConnection} from './network.js';
 import {SnapshotTimeline} from './timeline.js';
 import {inputMask,PredictedMotion} from './motion.js';
 import {GunFeedback,unlockAudio,setSound,sound} from './feedback.js';
-import {fieldHint,blockHint} from './lesson.js';
+import {fieldHint,blockHint,hasWalk} from './lesson.js';
 import {Navigation} from './navigation.js';
+import {availableActivities,claimedBy,nearActivity,inPracticeLane} from './activities.js';
+import {FramePacer} from './frame-pacing.js';
 const $=id=>document.getElementById(id);
 const make=(tag,txt,cls)=>{const el=document.createElement(tag);if(txt!==undefined)el.textContent=txt;if(cls)el.className=cls;return el;};
 let session=null,state=null,prev=null,stamp=0,me=null,yaw=0,pitch=0,tap=false,draft=fresh(),active=fresh(),cmdQueue=Promise.resolve(),toastTimer,clock=0,networkError=false;
 const held=new Set(), panels=$('panel'), world=$('world'), cards=new Map();
 const navigation=new Navigation(world.parentElement);
 $('game').querySelector('nav').append(navigation.select);
+const fieldActions=make('section',undefined,'field-actions');
+fieldActions.hidden=true;
+fieldActions.setAttribute('aria-label','附近可以做的事');
+const fieldHelp=make('span');
+const fieldButton=make('button','', 'primary');
+fieldButton.setAttribute('aria-keyshortcuts','E');
+fieldActions.append(fieldHelp,fieldButton);
+world.parentElement.append(fieldActions);
+const teamNews=make('p',undefined,'team-news');
+teamNews.setAttribute('role','status');
+fieldActions.before(teamNews);
+const wakeHint=make('div',undefined,'wake-hint');wakeHint.hidden=true;
+const wakeText=make('span','你還沒教角色怎麼走路。');wakeText.setAttribute('role','status');
+const wakeButton=make('button','接上第一塊積木','primary');wakeButton.onclick=()=>openPanel('blocks');
+wakeHint.append(wakeText,wakeButton);world.parentElement.append(wakeHint);
 const previewVisibility=new IntersectionObserver(entries=>{for(const e of entries){const card=cards.get(e.target.dataset.player);if(card)card.visible=e.isIntersecting;}});
 const motion=new PredictedMotion();
 const gun=new GunFeedback();
 const timeline=new SnapshotTimeline();
+const framePacer=new FramePacer();
 let connection=null,lastHud=0,lastDraw=0,draws=0,perfAt=0,quality='auto';
 const qualityButton=make('button','畫質：自動');
-qualityButton.onclick=()=>{quality=quality==='auto'?'low':quality==='low'?'high':'auto';setQuality(quality);qualityButton.textContent='畫質：'+({auto:'自動',low:'流暢',high:'精細'}[quality]);};
+const smoothButton=make('button','畫面卡？切換流暢模式','smooth-button');
+function changeQuality(value){
+  quality=value;setQuality(value);
+  qualityButton.textContent='畫質：'+({auto:'自動',low:'流暢',high:'精細'}[value]);
+  smoothButton.textContent=value==='low'?'已開啟流暢模式':'畫面卡？切換流暢模式';
+  smoothButton.setAttribute('aria-pressed',String(value==='low'));
+}
+qualityButton.onclick=()=>changeQuality(quality==='auto'?'low':quality==='low'?'high':'auto');
+smoothButton.onclick=()=>changeQuality(quality==='low'?'auto':'low');
+changeQuality('auto');
 const performanceLabel=make('span','測量流暢度中…','performance');performanceLabel.id='performance';
 $('game').querySelector('nav').append(qualityButton,performanceLabel);
+$('game').querySelector('nav').after(smoothButton);
 let shotTap=false,hitUntil=0,confirmedHits=0,audioOn=true;
 const soundButton=make('button','音效開');
 soundButton.onclick=()=>{audioOn=!audioOn;setSound(audioOn);soundButton.textContent=audioOn?'音效開':'音效關';};
@@ -101,6 +129,9 @@ function receiveState(s,serverTime){
       gun.sync(me);
       const earlier=prev?.players.find(p=>p.id===session.id);
       if(earlier&&(me.discovered?.length||0)>(earlier.discovered?.length||0))notify('發現新區域！+2 金幣 · 探索 '+me.discovered.length+'/4');
+      if(earlier?.practicing&&!me.practicing&&me.practiceWins>earlier.practiceWins)notify('練習成功！可以去探索，或請老師開第一波。');
+      const announcement=s.teamNews?.message||'';
+      if(teamNews.textContent!==announcement)teamNews.textContent=announcement;
       if(prev&&me.hit>confirmedHits){hitUntil=performance.now()+180;sound('hit',me.weapon);}
       confirmedHits=me.hit;
       if(!walked&&(me.walked||Math.hypot(me.x,me.z)>.55)){walked=true;sessionStorage.setItem('outpost.walked.'+session.id,'yes');}
@@ -114,8 +145,30 @@ function hud(){
   $('hud').textContent=(isSafe?'安全區':'野外')+'　♥ '+me.hp+'　◈ '+me.coins+'　'+weapons[me.weapon].name+'　'+(me.reload>0?'換彈中':me.ammo+'/'+weapons[me.weapon].cap);
   const exploring=state.mode==='survival'&&state.phase!=='active'&&(me.discovered?.length||0)<4;
   const mission=!me.walked?'走出基地光圈':!me.hits?'命中任一練習靶':exploring?'沿地圖找集合點，探索 '+(me.discovered?.length||0)+'/4':!state.kills?'和全隊擊敗一隻殭屍':!me.gear?'回商店買一把新武器':'自由挑戰：加入自動換彈或衝刺';
-  $('task').textContent=(guideHidden||me.hits?'任務　'+mission+'　｜　':'')+'第 '+state.wave+' 波 · '+phaseLabel[state.phase]+(state.mode==='defense'?'　發電機 '+state.coreHp+'%':state.cache&&state.phase==='active'?(state.cache.claimed?'　已取得補給':'　'+state.cache.name+'補給 '+Math.round(Math.hypot(me.x-state.cache.x,me.z-state.cache.z))+' m'):'');
+  $('task').textContent=me.practicing?'練習挑戰 · 試試你寫的射擊積木':(guideHidden||me.hits?'任務　'+mission+'　｜　':'')+'第 '+state.wave+' 波 · '+phaseLabel[state.phase]+(state.mode==='defense'?'　發電機 '+state.coreHp+'%':state.cache&&state.phase==='active'?(state.cache.claimed?'　已取得補給':'　'+state.cache.name+'補給 '+Math.round(Math.hypot(me.x-state.cache.x,me.z-state.cache.z))+' m'):'');
   $('shopBtn').disabled=$('editBtn').disabled=!isSafe;$('helpBtn').textContent=me.help?'收回舉手':'舉手求助';
+  refreshFieldAction();
+}
+let fieldActionKey='';
+function refreshFieldAction(){
+  const site=state.phase==='paused'?null:availableActivities(state).find(activity=>nearActivity(me,activity));
+  let key='',label='',hint='',run=null;
+  if(site){
+    const claimed=claimedBy(state,me,site);
+    key=site.id+':'+claimed;
+    label=site.action;
+    hint=claimed?(site.kind==='ammo'?'你已用過這處彈藥箱':state.activities[site.id]+' 已完成 '+site.name):site.hint;
+    if(!claimed)run=()=>api('interact',{site:site.id});
+  }else if(me.hits&&state.wave===0&&state.phase==='ready'&&(me.practicing||inPracticeLane(me))){
+    key='practice:'+me.practicing+':'+me.practiceWins;
+    label=me.practicing?'結束練習':me.practiceWins?'再挑戰一次':'挑戰練習殭屍';
+    hint=me.practicing?'面向北方找練習殭屍。離開靶區就會結束。':'可選練習 · 慢慢靠近，不會扣你的血';
+    run=()=>api('practice',{cmd:me.practicing?'cancel':'start'});
+  }
+  if(key===fieldActionKey)return;
+  fieldActionKey=key;fieldActions.hidden=!key;
+  fieldHelp.textContent=run?hint+' · 按 E 或點按鈕':hint;fieldButton.textContent=label;fieldButton.hidden=!run;
+  fieldButton.onclick=run?action(async()=>{const result=await run();if(result?.message)notify(result.message);world.focus({preventScroll:true});}):null;
 }
 function frame(now){
   if(!session)return;const dt=clamp((now-clock)/1000,0,.05);clock=now;
@@ -129,8 +182,8 @@ function frame(now){
     animateGun(dt,now/1000);
     const camera=motion.renderPosition(dt);
     navigation.update(state,{...me,...camera,yaw});
-    if(now-lastDraw>=15){
-      const gap=now-lastDraw;lastDraw=now;draws++;
+    if(framePacer.draw(now)){
+      const gap=lastDraw?now-lastDraw:16;lastDraw=now;draws++;
       const mark=now<hitUntil?'✳':'＋';if($('reticle').textContent!==mark)$('reticle').textContent=mark;
       $('reticle').style.transform='translate(-50%,-50%) scale('+(1+gun.kick*.35)+')';
       scene(world,betweenSnapshots(now),{...me,...camera},{yaw,pitch,kick:gun.kick,lastFire:gun.lastFire,frameMs:gap});
@@ -153,11 +206,17 @@ document.addEventListener('visibilitychange',()=>{
   resetKeys();connection?.setSuspended(document.hidden);
   // Exclude time spent on another tab or in an editor from the FPS sample.
   perfAt=performance.now();draws=0;lastDraw=perfAt;
+  framePacer.reset();
 });
 window.addEventListener('keydown',e=>{
   if(!me)return;const k=e.key.toLowerCase();
+  if(e.target instanceof Element&&e.target.closest('select,input,textarea'))return;
   if(k==='tab'&&!e.repeat&&!panels.open){e.preventDefault();openPanel('blocks');return;}
   if(panels.open)return;
+  if(k==='e'&&!e.repeat&&!fieldActions.hidden&&!fieldButton.hidden){e.preventDefault();fieldButton.click();return;}
+  if(k==='w'&&!walked&&!hasWalk(active)&&!active.rules.some(rule=>active.loop&&rule.when==='w'&&rule.do)){
+    e.preventDefault();wakeHint.hidden=false;if(document.pointerLockElement)document.exitPointerLock?.();return;
+  }
   if(['arrowleft','arrowright','shift','w','a','s','d','r','q'].includes(k)){e.preventDefault();if(!held.has(k)){sampleMovement(performance.now());held.add(k);sendInput();}}
 });window.addEventListener('keyup',e=>{const k=e.key.toLowerCase();if(held.has(k)){sampleMovement(performance.now());held.delete(k);sendInput();}});
 world.addEventListener('mousedown',e=>{
@@ -172,10 +231,10 @@ document.addEventListener('mousemove',e=>{if(document.pointerLockElement===world
 document.addEventListener('pointerlockchange',()=>{if(!document.pointerLockElement)resetKeys();});
 function openPanel(kind){
   if(!me||!safe(me.x,me.z)){notify('回到安全區就能使用');return;}
-  document.exitPointerLock?.();resetKeys();panels.showModal();
+  document.exitPointerLock?.();resetKeys();wakeHint.hidden=true;panels.showModal();
   if(kind==='blocks')bench();else shop();
 }
-$('closePanel').onclick=()=>panels.close();panels.addEventListener('close',()=>{resetKeys();perfAt=performance.now();draws=0;lastDraw=perfAt;});
+$('closePanel').onclick=()=>panels.close();panels.addEventListener('close',()=>{resetKeys();perfAt=performance.now();draws=0;lastDraw=perfAt;framePacer.reset();});
 $('editBtn').onclick=()=>openPanel('blocks');$('shopBtn').onclick=()=>openPanel('shop');
 $('backBtn').onclick=action(async()=>{resetKeys();await api('home');notify('已回基地補給');});
 $('helpBtn').onclick=action(()=>api('help',{on:!me.help}));
