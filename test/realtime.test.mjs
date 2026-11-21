@@ -10,6 +10,7 @@ import {join} from 'node:path';
 import WebSocket from '../vendor/ws/wrapper.mjs';
 import {SnapshotTimeline} from '../public/timeline.js';
 import {PredictedMotion} from '../public/motion.js';
+import {applyStatePatch} from '../public/sync.js';
 
 test('persistent connection pushes states without round trips, isolates sessions and reconnects',{timeout:8000},async t=>{
   const suffix='outpost-live-'+randomUUID();
@@ -27,10 +28,15 @@ test('persistent connection pushes states without round trips, isolates sessions
     const ws=new WebSocket('ws://localhost/live',{createConnection:()=>net.connect(socketPath),origin:'http://localhost'});
     t.after(()=>ws.terminate());await once(ws,'open');return ws;
   }
-  async function connect(token){
-    const ws=await open(),messages=[];
-    ws.on('message',bytes=>messages.push(JSON.parse(bytes)));
-    const ready=once(ws,'message');ws.send(JSON.stringify({kind:'auth',token}));await ready;return {ws,messages};
+  async function connect(token,delta=0){
+    const ws=await open(),messages=[],wire=[];let state=null;
+    ws.on('message',bytes=>{
+      const m=JSON.parse(bytes);wire.push(m);
+      if(m.kind==='state')state=m.state;
+      if(m.kind==='patch'){state=applyStatePatch(state,m.patch);messages.push({...m,kind:'state',state});}
+      else messages.push(m);
+    });
+    const ready=once(ws,'message');ws.send(JSON.stringify({kind:'auth',token,delta}));await ready;return {ws,messages,wire};
   }
   const bad=await open(),closed=once(bad,'close');bad.send(JSON.stringify({kind:'auth',token:'wrong'}));
   assert.equal((await closed)[0],4001);
@@ -52,6 +58,17 @@ test('persistent connection pushes states without round trips, isolates sessions
   one.ws.close();await once(one.ws,'close');
   const back=await connect(first.token);await new Promise(ok=>setTimeout(ok,70));
   assert.equal(back.messages.find(m=>m.kind==='state').state.players[0].id,first.id);
+  back.ws.close();await once(back.ws,'close');
+  const compact=await connect(first.token,1),teacher=await connect(a.token,1);
+  await new Promise(ok=>setTimeout(ok,1100));
+  assert.equal(compact.wire.filter(m=>m.kind==='state').length,1,'new connection starts with a complete state');
+  assert.ok(compact.wire.filter(m=>m.kind==='patch').length<=2,'idle connection sends only heartbeats');
+  const current=compact.messages.filter(m=>m.kind==='state').at(-1).state.players[0];
+  compact.ws.send(JSON.stringify({kind:'input',data:{keys:['w'],epoch:current.epoch,steps:[{seq:current.ack+1,mask:1,yaw:0,dt:.05}]}}));
+  await new Promise(ok=>setTimeout(ok,120));
+  assert.ok(compact.messages.filter(m=>m.kind==='state').at(-1).state.players[0].z>current.z,'delta frames still move the player');
+  assert.equal(compact.messages.filter(m=>m.kind==='state').at(-1).state.players[0].draft,undefined);
+  assert.deepEqual(teacher.messages.filter(m=>m.kind==='state').at(-1).state.players[0].draft,{loop:true,rules:[{when:'w',do:'forward'}]});
 });
 
 test('snapshot timeline smooths jitter, bounds extrapolation, and snaps teleports',()=>{

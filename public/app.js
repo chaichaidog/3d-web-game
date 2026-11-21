@@ -79,6 +79,7 @@ async function enter(s){
     $('status').textContent=(connected?(s.teacher?'老師指揮台':'學生連線中'):'正在重新連線…')+' ／ '+s.code;
     if(!connected)resetKeys();
   },()=>{sessionStorage.removeItem('outpost.session');location.reload();});
+  connection.setSuspended(document.hidden);
   setInterval(sendInput,33);
   requestAnimationFrame(frame);
 }
@@ -140,7 +141,12 @@ function betweenSnapshots(now){
   return state?.phase==='paused'?state:timeline.sample(now,session.teacher?220:100)||state;
 }
 function resetKeys(){motionTime=performance.now();held.clear();tap=false;moveTap=false;shotTap=false;sendInput();}
-window.addEventListener('blur',resetKeys);document.addEventListener('visibilitychange',resetKeys);
+window.addEventListener('blur',resetKeys);
+document.addEventListener('visibilitychange',()=>{
+  resetKeys();connection?.setSuspended(document.hidden);
+  // Exclude time spent on another tab or in an editor from the FPS sample.
+  perfAt=performance.now();draws=0;lastDraw=perfAt;
+});
 window.addEventListener('keydown',e=>{
   if(!me)return;const k=e.key.toLowerCase();
   if(k==='tab'&&!e.repeat&&!panels.open){e.preventDefault();openPanel('blocks');return;}
@@ -162,7 +168,7 @@ function openPanel(kind){
   document.exitPointerLock?.();resetKeys();panels.showModal();
   if(kind==='blocks')bench();else shop();
 }
-$('closePanel').onclick=()=>panels.close();panels.addEventListener('close',resetKeys);
+$('closePanel').onclick=()=>panels.close();panels.addEventListener('close',()=>{resetKeys();perfAt=performance.now();draws=0;lastDraw=perfAt;});
 $('editBtn').onclick=()=>openPanel('blocks');$('shopBtn').onclick=()=>openPanel('shop');
 $('backBtn').onclick=action(async()=>{resetKeys();await api('home');notify('已回基地補給');});
 $('helpBtn').onclick=action(()=>api('help',{on:!me.help}));

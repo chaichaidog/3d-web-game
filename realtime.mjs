@@ -1,5 +1,6 @@
 import {WebSocketServer,WebSocket} from './vendor/ws/wrapper.mjs';
 import {cleanInput,snapshot} from './game.mjs';
+import {statePatch} from './public/sync.js';
 
 // Tokens travel in the first encrypted frame, never in a URL or access log.
 export function realtime(server,sessions,api){
@@ -24,7 +25,7 @@ export function realtime(server,sessions,api){
         const msg=JSON.parse(bytes.toString());if(!msg||typeof msg!=='object')throw Error('Invalid message');
         if(!auth){
           if(msg.kind!=='auth'||!sessions.has(msg.token)){ws.close(4001,'Session ended');return;}
-          token=msg.token;auth=sessions.get(token);ws.auth=auth;clearTimeout(timeout);
+          token=msg.token;auth=sessions.get(token);ws.auth=auth;ws.delta=msg.delta===1;clearTimeout(timeout);
           ws.send(JSON.stringify({kind:'ready'}));return;
         }
         if(sessions.get(token)!==auth){ws.close(4001,'Session ended');return;}
@@ -49,7 +50,16 @@ export function realtime(server,sessions,api){
       if(ws.isIdle()){ws.close(4000,'Reconnect');continue;}
       if(ws.bufferedAmount>131072)continue; // Slow connections get the newest snapshot, not a growing queue.
       const {r,p}=ws.auth;if(!p&&frame%4!==0)continue;
-      ws.send(JSON.stringify({kind:'state',serverTime:Date.now(),clientTime:ws.clientTime,state:snapshot(r,p?.id,!p)}));
+      const now=Date.now(),state=snapshot(r,p?.id,!p);
+      if(ws.delta&&ws.previous){
+        const patch=statePatch(ws.previous,state);
+        // Empty classrooms and idle players need only a one-second heartbeat.
+        if(!Object.keys(patch).length&&now-ws.lastState<1000)continue;
+        ws.send(JSON.stringify({kind:'patch',serverTime:now,clientTime:ws.clientTime,patch}));
+      }else ws.send(JSON.stringify({kind:'state',serverTime:now,clientTime:ws.clientTime,state}));
+      ws.lastState=now;
+      // snapshot contains live game objects; never retain those mutable references.
+      if(ws.delta)ws.previous=structuredClone(state);
     }
   },50);timer.unref();
   server.on('close',()=>{clearInterval(timer);for(const ws of wss.clients)ws.terminate();wss.close();});
