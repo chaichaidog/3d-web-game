@@ -21,6 +21,7 @@
 .wake-hint{position:absolute;z-index:3;top:46%;left:50%;transform:translate(-50%,-50%);width:max-content;max-width:90%;padding:14px 18px;border:1px solid #8e9bae;border-radius:8px;background:#202c3bf5;display:flex;align-items:center;flex-wrap:wrap;gap:10px}
 .field-actions{position:absolute;z-index:3;right:12px;bottom:12px;max-width:min(330px,52%);border:1px solid #6d7e86;border-radius:7px;padding:9px;background:#1b2736ee;display:grid;gap:7px;color:#d3dee4;font-size:12px}
 .field-actions .primary{padding:6px 10px}.team-news{position:absolute;z-index:3;left:12px;top:56px;max-width:65%;width:max-content;margin:0;padding:8px 12px;border-radius:5px;background:#303e4cf2;color:#f3dfad;font-size:13px;pointer-events:none}
+.field-actions select{padding:5px 9px;font-size:13px}.enemy-warning{position:absolute;z-index:3;left:50%;top:14%;transform:translateX(-50%);pointer-events:none;padding:8px 14px;border:1px solid #da9f73;border-radius:6px;background:#38271ef0;color:#ffe1ae;font-weight:700;text-align:center;max-width:65%;width:max-content}
 .team-news:empty{display:none}.smooth-button{color:#e0d3b8;font-size:13px;margin-bottom:4px}.smooth-button[aria-pressed=true]{background:#31525b;color:#d3efec}
 @media(max-width:740px){.field-actions{bottom:45px;max-width:66%}.team-news{top:45px;max-width:51%}}
 #navigation{position:absolute;right:12px;top:12px;width:184px;background:#1b2736e8;border:1px solid #62717b;border-radius:6px;padding:7px;pointer-events:none;z-index:2;display:grid;gap:3px}

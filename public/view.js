@@ -4,6 +4,7 @@ import {core,targets,weapons} from './rules.js';
 import {traceShot} from './aim.js';
 import {landmarks} from './world.js';
 import {availableActivities,claimedBy,isPracticeVisible} from './activities.js';
+import {enemies,rallyRange} from './enemies.js';
 export {cover} from './cover.js';
 export const setQuality=rendererQuality;
 
@@ -15,7 +16,7 @@ function getView(canvas){
 export function localShot(canvas,state,player){
   const v=getView(canvas),now=performance.now()/1000,spread=weapons[player.weapon].spread;
   const enemies=state.enemies.filter(enemy=>isPracticeVisible(enemy,player));
-  const candidates=player.practicing?enemies:[...enemies,...targets];
+  const candidates=!player.practicing&&state.phase==='ready'?[...enemies,...targets]:enemies;
   for(const delta of spread?[-spread,0,spread]:[0]){
     const {nearest,...ray}=traceShot(player,candidates,delta);
     v.traces.push({...ray,born:now,local:true,yaw:player.yaw});
@@ -80,13 +81,16 @@ function labels(v,canvas,state,me,matrix){
     g.lineWidth=4;g.strokeStyle='#263746';g.strokeText(name,x,y);g.fillStyle=site.tint;g.fillText(name,x,y);
   }
   for(const p of [...state.enemies.filter(e=>isPracticeVisible(e,me)),...state.players.filter(p=>p.online&&p.id!==me.id)]){
-    const height=p.type==='boss'?3.85:p.type==='swarm'?1.65:2.15;
+    const spec=enemies[p.type];
+    if(spec&&Math.hypot(p.x-me.x,p.z-me.z)>32)continue;
+    const height=2.15*(spec?.scale??1);
     const q=[p.x,height,p.z,1],projected=[0,1,2,3].map(row=>q.reduce((sum,n,col)=>sum+n*matrix[col*4+row],0));
     if(projected[3]<.1)continue;
     const x=w*(.5+projected[0]/projected[3]/2),y=h*(.5-projected[1]/projected[3]/2);
-    const name=p.name||(p.type==='boss'?'巨型感染者':'');
-    if(name){g.lineWidth=3;g.strokeStyle='#263746';g.strokeText(name,x,y-6);g.fillStyle='#d8e1e4';g.fillText(name,x,y-6);}
+    const name=p.name||(spec?(p.practiceOwner?'練習 · ':'')+spec.name+(p.cue?' ！':''):'');
+    if(name){g.lineWidth=3;g.strokeStyle='#263746';g.strokeText(name,x,y-6);g.fillStyle=spec?.tint||'#d8e1e4';g.fillText(name,x,y-6);}
     if(p.max){g.fillStyle='#283a44';g.fillRect(x-16,y,32,4);g.fillStyle='#b49776';g.fillRect(x-16,y,32*Math.max(0,p.hp/p.max),4);}
+    if(p.armor>0){g.fillStyle='#efc96d';g.fillRect(x-16,y+5,32*p.armor/spec.armor,3);}
   }
 }
 export function scene(canvas,state,me,view=me,first=true){
@@ -97,7 +101,7 @@ export function scene(canvas,state,me,view=me,first=true){
   const now=performance.now()/1000,dt=state.phase==='paused'?0:Math.min(now-v.last,.08);v.last=now;v.time+=dt;
   const drawDistance=v.renderer.detailDistance;
   const out=scenery.filter(chunk=>Math.hypot(chunk.x-me.x,chunk.z-me.z)<drawDistance+chunk.radius),root=identity();
-  if(!me.practicing&&Math.hypot(me.x,me.z-8)<drawDistance)for(const t of targets){
+  if(state.phase==='ready'&&!me.practicing&&Math.hypot(me.x,me.z-8)<drawDistance)for(const t of targets){
     part(out,root,'cylinder',t.x,.55,t.z,.09,1.1,.09,'#7c817d');
     part(out,root,'cylinder',t.x,1.35,t.z,.95,.06,.95,'#a38470',Math.PI/2);
     part(out,root,'cylinder',t.x,1.35,t.z-.037,.6,.012,.6,'#d0c4ac',Math.PI/2);
@@ -137,7 +141,19 @@ export function scene(canvas,state,me,view=me,first=true){
     }
   }
   const livingIds=new Set();
-  for(const e of state.enemies)if(isPracticeVisible(e,me)&&Math.hypot(e.x-me.x,e.z-me.z)<drawDistance){livingIds.add(e.id);character(out,e,poseFor(v,e,dt));}
+  for(const e of state.enemies)if(isPracticeVisible(e,me)&&Math.hypot(e.x-me.x,e.z-me.z)<drawDistance){
+    livingIds.add(e.id);character(out,e,poseFor(v,e,dt));
+    if(e.type==='drummer')part(out,root,'ring',e.x,.07,e.z,rallyRange*2,1,rallyRange*2,'#84d8e9',0,0,0,.66,1);
+    const cue=e.cue;
+    if(cue?.kind==='pulse'){
+      const size=cue.radius*2;
+      part(out,root,'cylinder',cue.x,.062,cue.z,size,.006,size,'#e98762',0,0,0,.28,1);
+      part(out,root,'ring',cue.x,.073,cue.z,size,1,size,'#ffc38b',0,0,0,.94,1);
+    }else if(cue?.kind==='charge'){
+      const start=transform(cue.x,.066,cue.z,0,cue.yaw);
+      part(out,start,'box',0,0,1.7,1.8,.012,3.4,'#fcb383',0,0,0,.55,1);
+    }
+  }
   for(const p of state.players)if(p.id!==me.id&&p.online){
     livingIds.add(p.id);const pose=poseFor(v,p,dt);
     // Classmates share the spawn point; never put the camera inside their torso.

@@ -1,4 +1,5 @@
 import {identity,multiply,transform,color,bakeMesh} from './mesh.js';
+import {enemies} from './enemies.js';
 export function part(out,root,kind,x,y,z,sx,sy,sz,tint,rx=0,ry=0,rz=0,alpha=1,emission=0){
   out.push({kind,matrix:multiply(root,transform(x,y,z,rx,ry,rz,sx,sy,sz)),color:color(tint,alpha),emission});
 }
@@ -16,6 +17,8 @@ const palettes={
   runner:{skin:'#a4aca0',coat:'#8b6655',dark:'#4d3c39',accent:'#b59c78',pants:'#414950'},
   brute:{skin:'#8a9989',coat:'#56636b',dark:'#303d46',accent:'#b79065',pants:'#3c4549'},
   swarm:{skin:'#99a79c',coat:'#5c7774',dark:'#334b4b',accent:'#a69b72',pants:'#3e4b4c'},
+  mire:{skin:'#afa5c1',coat:'#695f86',dark:'#423951',accent:'#bca9ff',pants:'#434252'},
+  drummer:{skin:'#a0b5b8',coat:'#536d7b',dark:'#273e4c',accent:'#91d9e2',pants:'#384c59'},
   boss:{skin:'#858f7f',coat:'#514c4a',dark:'#333738',accent:'#b48b68',pants:'#3f4141'}
 };
 function rig(type){
@@ -38,6 +41,15 @@ function rig(type){
         p('taper',side*.38,.58,-.03,.12,.26,.15,c.accent,0,0,-side*.4);
       }
       p('sphere',.08,.45,-.16,.28,.28,.16,c.dark);
+      if(type==='mire')for(const side of [-1,1]){
+        p('sphere',side*.24,.47,-.1,.34,.32,.37,c.accent);
+        p('sphere',side*.33,.57,-.13,.21,.23,.24,'#8777a9');
+      }
+      if(type==='drummer')for(const side of [-1,1]){
+        p('taper',side*.21,.52,-.14,.21,.56,.26,c.dark,.1,0,side*.25);
+        p('cylinder',side*.21,.59,.19,.17,.08,.17,c.accent,Math.PI/2);
+        p('cylinder',side*.26,.77,-.1,.24,.08,.24,c.accent,0,0,side*.25);
+      }
     }else{
       p('taper',0,.26,.17,.4,.4,.07,c.dark);
       for(const side of [-1,1]){
@@ -69,6 +81,8 @@ function rig(type){
       p('sphere',-.015,.21,-.045,.29,.13,.25,'#3a4942');
       p('wedge',.1,.17,-.02,.08,.12,.14,'#3a4942',0,0,-.3);
       p('box',.12,.03,.12,.017,.1,.01,'#64735e',0,0,-.35);
+      if(type==='runner')p('box',0,.155,.14,.25,.055,.073,'#f4a780');
+      if(type==='mire')p('sphere',0,.22,-.025,.43,.21,.39,c.accent);
       if(type==='boss')for(const side of [-1,1])p('taper',side*.18,.14,0,.11,.29,.14,c.accent,.2,0,-side*.45);
     }else{
       p('sphere',0,.21,-.025,.34,.2,.33,c.dark);
@@ -79,6 +93,10 @@ function rig(type){
       for(const side of [-1,1])p('box',side*.143,.045,.03,.025,.15,.045,'#334651');
       p('box',0,.25,.135,.04,.04,.04,c.accent);
     }
+  });
+  if(type==='brute')rig.armor=build(label+'-armor',p=>{
+    p('wedge',0,.24,.22,.59,.5,.19,'#b79450',Math.PI);
+    for(let i=0;i<3;i++)p('box',0,.13+i*.12,.335,.51,.055,.035,'#f4d184');
   });
   for(const side of [-1,1]){
     rig['arm'+side]=build(label+'-arm'+side,p=>{
@@ -112,13 +130,15 @@ const rigs=new Map();
 export function character(out,actor,pose){
   const type=actor.type||'player',zombie=Boolean(actor.type);
   if(!rigs.has(type))rigs.set(type,rig(type));const r=rigs.get(type);
-  const scale=type==='boss'?1.8:type==='swarm'?.8:1,speed=Math.min(pose.speed/2,1);
+  const scale=enemies[type]?.scale??1,speed=Math.min(pose.speed/2,1);
   const phase=pose.phase,step=Math.sin(phase),stride=step*(type==='runner'?.7:.43)*speed;
   const heavy=type==='brute'||type==='boss',sway=zombie?.08:.025;
   const root=transform(actor.x,.015+Math.abs(Math.sin(phase))*.024*speed,actor.z,0,pose.yaw,0,scale);
   part(out,root,'cylinder',0,-.005,0,.7,.008,.46,'#182c2e',0,0,0,.2);
-  const body=joint(root,0,.94,0,(zombie?.2:0)-(pose.pain||0)*.25,Math.sin(phase)*.025*speed,Math.sin(phase*.5)*sway*speed);
+  const lean=actor.cue?.kind==='charge'?.62:type==='runner'?.38:type==='swarm'?.48:zombie?.2:0;
+  const body=joint(root,0,.94,0,lean-(pose.pain||0)*.25,Math.sin(phase)*.025*speed,Math.sin(phase*.5)*sway*speed);
   mesh(out,r.body,body);
+  if(r.armor&&actor.armor>0)mesh(out,r.armor,body);
   mesh(out,r.head,joint(body,0,.65,zombie?.045:0,zombie?-.12+Math.sin(pose.time*1.4)*.035:0,Math.sin(pose.time*.7)*.04,zombie?-.1:0));
   for(const side of [-1,1]){
     const swing=stride*side;

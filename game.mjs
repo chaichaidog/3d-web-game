@@ -4,7 +4,9 @@ import {inputMask,commandsFor,move} from './public/motion.js';
 import {traceShot} from './public/aim.js';
 import {WORLD_LIMIT,landmarks,blocked,moveWorld,wallDistance,pathTo} from './public/world.js';
 import {availableActivities,claimedBy,nearActivity,inPracticeLane} from './public/activities.js';
+import {enemies,waveTypes,waveOrder,pulseRange,rallyRange} from './public/enemies.js';
 const routes=new WeakMap();
+const abilities=new WeakMap();
 export function room(code) {
   return {code, mode:'survival', phase:'ready', wave:0, coreHp:100, kills:0, players:new Map(), enemies:[], shots:[], fallen:[], activities:{}, teamNews:null, message:'集合完畢後，老師可以開始第一波。', touched:Date.now()};
 }
@@ -58,12 +60,13 @@ export function interact(r,p,id){
   r.teamNews={id:randomUUID(),message};
   return {message};
 }
-export function practice(r,p,cmd){
+export function practice(r,p,cmd,type='walker'){
   if(cmd==='cancel'){p.practice=null;return;}
   if(cmd!=='start'||r.phase!=='ready'||r.wave!==0||!p.hits)throw Error('先完成打靶，才能在第一波開始前練習');
   if(!inPracticeLane(p))throw Error('回到基地北側的練習靶區再開始');
   if(p.practice)return;
-  p.practice={id:randomUUID(),name:'練習殭屍',type:'walker',practiceOwner:p.id,hp:28,max:28,x:p.x,z:Math.max(15,p.z+6),yaw:Math.PI,hit:0};
+  if(!Object.hasOwn(enemies,type))throw Error('請選擇練習對象');
+  p.practice={...spawnEnemy(type,p.x,Math.max(15,p.z+6),Math.PI),practiceOwner:p.id};
 }
 export function edit(p,body,run){
   if(!safe(p.x,p.z)) throw Error('請先回到安全區');
@@ -84,6 +87,10 @@ export function buy(p,key){
   }
   p.weapon=key;p.ammo=item.cap;p.reload=0;
 }
+function spawnEnemy(type,x,z,yaw,players=1){
+  const spec=enemies[type],hp=spec.hp+(type==='boss'?players*24:0);
+  return {id:randomUUID(),type,hp,max:hp,x,z,yaw,hit:0,attack:0,cool:1,speed:spec.speed,armor:spec.armor||0,cue:null};
+}
 export function nextWave(r) {
   if(r.phase==='active'||r.phase==='paused')throw Error('請先完成本波');
   const retry=r.phase==='lost';
@@ -94,13 +101,10 @@ export function nextWave(r) {
   r.cache=r.mode==='survival'?{x:site.x+2,z:site.z+2,claimed:false,name:site.name}:null;
   const count=Math.max(1,[...r.players.values()].filter(p=>Date.now()-p.seen<15000).length);
   const roaming=r.mode==='survival'?[...r.players.values()].filter(p=>!safe(p.x,p.z)&&Date.now()-p.seen<5000):[];
-  const bossWave=r.wave%5===0;
   const n=Math.min(24,2+count+Math.min(r.wave-1,8));
-  for(let i=0;i<n+(bossWave?1:0);i++){
-    const boss=bossWave&&i===n;
-    const type=boss?'boss':['walker','runner','brute','swarm'][(i%2===0?0:(r.wave-1)%4)];
+  const lineup=waveTypes(r.wave,n);
+  for(const [i,type] of lineup.entries()){
     const a=(i+Math.random()*.5)/n*Math.PI*2;
-    const hp={walker:28,runner:18,brute:65,swarm:14,boss:120+count*35}[type];
     const anchor=roaming[i%roaming.length]||{x:0,z:0};
     let x=0,z=20;
     for(let attempt=0;attempt<32;attempt++){
@@ -109,9 +113,10 @@ export function nextWave(r) {
       z=clamp(anchor.z+Math.cos(angle)*20,-WORLD_LIMIT+2,WORLD_LIMIT-2);
       if(!blocked(x,z,.65)&&!safe(x,z)&&Math.hypot(x-anchor.x,z-anchor.z)>10)break;
     }
-    r.enemies.push({id:randomUUID(),type,hp,max:hp,x,z,yaw:a+Math.PI,hit:0,attack:0,cool:1,speed:{walker:1.5,runner:2.6,brute:1,swarm:2.1,boss:1.3}[type]});
+    r.enemies.push(spawnEnemy(type,x,z,a+Math.PI,count));
   }
-  r.message=bossWave?'警報！巨型感染者進場':'第 '+r.wave+' 波開始';
+  const featured=r.wave%5===0?'boss':waveOrder[r.wave-1];
+  r.message=featured?enemies[featured].name+' · '+enemies[featured].hint:'準備迎接混合怪群';
 }
 export function control(r,cmd,mode){
   if(cmd==='next')return nextWave(r);
@@ -127,14 +132,16 @@ function shoot(r,p) {
   if(p.reload>0||p.delay>0||p.ammo<=0||safe(p.x,p.z))return;
   const w=weapons[p.weapon];p.delay=w.delay;p.ammo--;p.shot++;
   for(const delta of w.spread?[-w.spread,0,w.spread]:[0]){
-    const candidates=p.practice?[p.practice]:[...r.enemies,...targets];
+    const candidates=p.practice?[p.practice]:r.phase==='ready'?[...r.enemies,...targets]:r.enemies;
     const {nearest,...ray}=traceShot(p,candidates,delta);
     const shot={...ray,id:p.id+':'+p.shot+':'+delta,owner:p.id,weapon:p.weapon,t:.8,impact:nearest?nearest.type?'enemy':'target':'none'};
     r.shots.push(shot);
     if(!nearest)continue;
     p.hit++;
     if(!nearest.type){p.hits++;continue;}
-    nearest.hp-=w.damage;nearest.hit=(nearest.hit||0)+1;
+    const absorbed=Math.min(nearest.armor||0,w.damage);
+    if(absorbed){nearest.armor-=absorbed;shot.impact=nearest.armor?'armor':'armorBreak';}
+    nearest.hp-=w.damage-absorbed;nearest.hit=(nearest.hit||0)+1;
     if(nearest.hp<=0){
       if(nearest.practiceOwner){
         p.practice=null;p.practiceWins++;
@@ -159,6 +166,59 @@ function runPlayer(r,p,dt){
   if(commands.has('reload')&&p.reload<=0&&p.ammo<weapons[p.weapon].cap)p.reload=1;
   if(commands.has('heal')&&p.kits>0&&p.hp<100){p.hp=Math.min(100,p.hp+45);p.kits--;}
 }
+function moveEnemy(e,dx,dz){
+  const x=e.x+dx,z=e.z+dz;
+  if(!safe(x,z)){moveWorld(e,dx,dz,.35);return;}
+  const angle=Math.atan2(e.z,e.x);
+  const side=e.x*dz-e.z*dx>=0?1:-1;
+  const next=angle+side*Math.hypot(dx,dz)/5;
+  moveWorld(e,5.05*Math.cos(next)-e.x,5.05*Math.sin(next)-e.z,.35);
+}
+function hurt(r,target,amount){
+  if(target===core){r.coreHp=Math.max(0,r.coreHp-amount);return;}
+  if(safe(target.x,target.z))return;
+  target.hp-=amount;
+  if(target.hp<=0)home(target);
+}
+function specialMove(r,e,target,distance,dt,obstructed,outside){
+  const state=abilities.get(e)||{cooldown:0,windup:0,dash:0};
+  abilities.set(e,state);
+  state.cooldown-=dt;
+  if(state.windup>0){
+    if(e.cue.kind==='charge')e.yaw=e.cue.yaw;
+    state.windup-=dt;
+    if(state.windup>0)return true;
+    const cue=e.cue;e.cue=null;e.attack++;
+    if(cue.kind==='charge'){
+      state.dash=.55;state.yaw=cue.yaw;e.yaw=cue.yaw;
+    }else if(!e.practiceOwner){
+      const radius=cue.radius;
+      const victims=r.mode==='defense'?[...outside,core]:outside;
+      for(const p of victims)if(Math.hypot(p.x-cue.x,p.z-cue.z)<radius)hurt(r,p,e.type==='boss'?16:9);
+    }
+    return true;
+  }
+  if(state.dash>0){
+    e.yaw=state.yaw;
+    state.dash-=dt;
+    const targetsInReach=e.practiceOwner?[target]:(r.mode==='defense'?[...outside,core]:outside);
+    const contact=targetsInReach.find(p=>(p===core||!safe(p.x,p.z))&&Math.hypot(p.x-e.x,p.z-e.z)<(e.practiceOwner?3.2:1.4));
+    if(contact){state.dash=0;if(!e.practiceOwner)hurt(r,contact,8);}
+    else moveEnemy(e,Math.sin(state.yaw)*5.8*dt,Math.cos(state.yaw)*5.8*dt);
+    return true;
+  }
+  if(obstructed||state.cooldown>0)return false;
+  if(e.type==='runner'&&distance>3.25&&distance<7){
+    state.windup=.9;state.cooldown=4.5;e.cue={kind:'charge',x:e.x,z:e.z,yaw:e.yaw};
+    return true;
+  }
+  if((e.type==='mire'||e.type==='boss')&&distance<pulseRange){
+    state.windup=e.type==='boss'?1.8:1.5;state.cooldown=5;
+    e.cue={kind:'pulse',x:target.x,z:target.z,radius:e.type==='boss'?4.2:2.7};
+    return true;
+  }
+  return false;
+}
 export function tick(r,dt){
   if(r.phase==='paused'){for(const p of r.players.values())p.tap=false;return;}
   r.shots=r.shots.filter(s=>(s.t-=dt)>0);
@@ -169,7 +229,10 @@ export function tick(r,dt){
       else{
         const enemy=p.practice,dx=p.x-enemy.x,dz=p.z-enemy.z,distance=Math.hypot(dx,dz);
         enemy.yaw=Math.atan2(dx,dz);
-        if(distance>3){const step=Math.min(.85*dt,distance-3)/distance;moveWorld(enemy,dx*step,dz*step);}
+        if(!specialMove(r,enemy,p,distance,dt,false,[])&&distance>3){
+          const step=Math.min(enemy.speed*.65*dt,distance-3)/distance;
+          moveWorld(enemy,dx*step,dz*step);
+        }
       }
     }
     runPlayer(r,p,dt);
@@ -186,18 +249,18 @@ export function tick(r,dt){
     r.cache.claimed=true;for(const p of r.players.values())p.kits++;
     r.message='找到補給箱，全隊每人獲得一個醫療包！';
   }
+  const drummers=r.enemies.filter(e=>e.type==='drummer');
   for(const e of r.enemies){
+    const boosted=e.type!=='drummer'&&drummers.some(d=>Math.hypot(e.x-d.x,e.z-d.z)<rallyRange);
     let target=r.mode==='defense'?core:null,best=target?Math.hypot(e.x-core.x,e.z-core.z):Infinity;
     for(const p of outside){const d=Math.hypot(e.x-p.x,e.z-p.z);if(d<best){best=d;target=p;}}
-    if(!target)continue;
+    if(!target){e.cue=null;abilities.delete(e);continue;}
     e.yaw=Math.atan2(target.x-e.x,target.z-e.z);
     e.cool-=dt;
     const obstructed=best>0&&wallDistance(e.x,e.z,(target.x-e.x)/best,(target.z-e.z)/best,0,best,.36)<best;
-    if(best<1.65&&!obstructed){
-      if(e.cool<=0){e.cool=1.2;e.attack=(e.attack||0)+1;const hurt=e.type==='boss'?18:6;
-        if(target===core)r.coreHp=Math.max(0,r.coreHp-hurt);
-        else {target.hp-=hurt;if(target.hp<=0)home(target);}
-      }
+    if((e.type==='runner'||e.type==='mire'||e.type==='boss')&&specialMove(r,e,target,best,dt,obstructed,outside))continue;
+    if(best<(e.type==='swarm'?1.25:1.65)&&!obstructed){
+      if(e.cool<=0){e.cool=1.2;e.attack=(e.attack||0)+1;hurt(r,target,e.type==='boss'?18:6);}
     }else{
       let waypoint=target;
       if(obstructed){
@@ -209,9 +272,8 @@ export function tick(r,dt){
       }else routes.delete(e);
       const length=Math.hypot(waypoint.x-e.x,waypoint.z-e.z)||1;
       const vx=(waypoint.x-e.x)/length,vz=(waypoint.z-e.z)/length;
-      let nx=e.x+vx*e.speed*dt,nz=e.z+vz*e.speed*dt;
-      if(safe(nx,nz)){const a=Math.atan2(e.z,e.x),dir=e.x*vz-e.z*vx>=0?1:-1; nx=5.05*Math.cos(a+dir*e.speed*dt/5);nz=5.05*Math.sin(a+dir*e.speed*dt/5);}
-      moveWorld(e,nx-e.x,nz-e.z,.35);
+      const speed=e.speed*(boosted?1.3:1);
+      moveEnemy(e,vx*speed*dt,vz*speed*dt);
     }
   }
   if(!r.coreHp){r.phase='lost';r.enemies=[];r.message='發電機離線。補給後可重試本波。';}

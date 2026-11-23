@@ -31,6 +31,14 @@ function triangle(out,a,b,c){
 }
 export function geometry(kind){
   const out=[];
+  if(kind==='ring'){
+    const point=(i,r)=>[Math.sin(i*Math.PI/16)*r,0,Math.cos(i*Math.PI/16)*r];
+    for(let i=0;i<32;i++){
+      const a=point(i,.5),b=point(i+1,.5),c=point(i+1,.47),d=point(i,.47);
+      triangle(out,a,b,c);triangle(out,a,c,d);
+    }
+    return new Float32Array(out);
+  }
   if(kind==='box'||kind==='taper'||kind==='wedge'){
     const v=[[-.5,-.5,-.5],[.5,-.5,-.5],[.5,-.5,.5],[-.5,-.5,.5],[-.5,.5,-.5],[.5,.5,-.5],[.5,.5,.5],[-.5,.5,.5]];
     if(kind==='taper')for(let i=0;i<4;i++){v[i][0]*=.65;v[i][2]*=.75;}

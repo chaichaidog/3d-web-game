@@ -8,6 +8,7 @@ import {fieldHint,blockHint,hasWalk} from './lesson.js';
 import {Navigation} from './navigation.js';
 import {availableActivities,claimedBy,nearActivity,inPracticeLane} from './activities.js';
 import {FramePacer} from './frame-pacing.js';
+import {enemies,waveOrder} from './enemies.js';
 const $=id=>document.getElementById(id);
 const make=(tag,txt,cls)=>{const el=document.createElement(tag);if(txt!==undefined)el.textContent=txt;if(cls)el.className=cls;return el;};
 let session=null,state=null,prev=null,stamp=0,me=null,yaw=0,pitch=0,tap=false,draft=fresh(),active=fresh(),cmdQueue=Promise.resolve(),toastTimer,clock=0,networkError=false;
@@ -18,9 +19,15 @@ const fieldActions=make('section',undefined,'field-actions');
 fieldActions.hidden=true;
 fieldActions.setAttribute('aria-label','附近可以做的事');
 const fieldHelp=make('span');
+const practiceSelect=make('select');practiceSelect.hidden=true;
+practiceSelect.setAttribute('aria-label','選擇練習怪物');
+for(const type of waveOrder)practiceSelect.add(new Option(enemies[type].name,type));
+practiceSelect.onchange=()=>{fieldActionKey='';refreshFieldAction();};
 const fieldButton=make('button','', 'primary');
 fieldButton.setAttribute('aria-keyshortcuts','E');
-fieldActions.append(fieldHelp,fieldButton);
+fieldActions.append(fieldHelp,practiceSelect,fieldButton);
+const enemyWarning=make('div',undefined,'enemy-warning');enemyWarning.hidden=true;
+world.parentElement.append(enemyWarning);
 world.parentElement.append(fieldActions);
 const teamNews=make('p',undefined,'team-news');
 teamNews.setAttribute('role','status');
@@ -124,6 +131,7 @@ function receiveState(s,serverTime){
     timeline.push(s,serverTime,now);
     prev=state;state=s;stamp=now;me=s.players.find(p=>p.id===session.id);
     if(me){
+      if(prev&&s.wave>prev.wave)notify('第 '+s.wave+' 波 · '+s.message);
       if(!prev){yaw=me.yaw;pitch=me.pitch;}
       motion.reconcile(me,active,state.phase==='paused');
       gun.sync(me);
@@ -148,11 +156,16 @@ function hud(){
   $('task').textContent=me.practicing?'練習挑戰 · 試試你寫的射擊積木':(guideHidden||me.hits?'任務　'+mission+'　｜　':'')+'第 '+state.wave+' 波 · '+phaseLabel[state.phase]+(state.mode==='defense'?'　發電機 '+state.coreHp+'%':state.cache&&state.phase==='active'?(state.cache.claimed?'　已取得補給':'　'+state.cache.name+'補給 '+Math.round(Math.hypot(me.x-state.cache.x,me.z-state.cache.z))+' m'):'');
   $('shopBtn').disabled=$('editBtn').disabled=!isSafe;$('helpBtn').textContent=me.help?'收回舉手':'舉手求助';
   refreshFieldAction();
+  const pulse=state.enemies.find(enemy=>enemy.cue?.kind==='pulse'&&Math.hypot(me.x-enemy.cue.x,me.z-enemy.cue.z)<enemy.cue.radius);
+  const charge=state.enemies.find(enemy=>enemy.cue?.kind==='charge'&&Math.hypot(me.x-enemy.x,me.z-enemy.z)<8);
+  const warning=pulse?'離開亮圈！':charge?'衝刺者在蓄力，往旁邊閃！':'';
+  if(enemyWarning.textContent!==warning)enemyWarning.textContent=warning;
+  enemyWarning.hidden=!warning||isSafe||state.phase==='paused';
 }
 let fieldActionKey='';
 function refreshFieldAction(){
   const site=state.phase==='paused'?null:availableActivities(state).find(activity=>nearActivity(me,activity));
-  let key='',label='',hint='',run=null;
+  let key='',label='',hint='',run=null,choosePractice=false;
   if(site){
     const claimed=claimedBy(state,me,site);
     key=site.id+':'+claimed;
@@ -160,13 +173,15 @@ function refreshFieldAction(){
     hint=claimed?(site.kind==='ammo'?'你已用過這處彈藥箱':state.activities[site.id]+' 已完成 '+site.name):site.hint;
     if(!claimed)run=()=>api('interact',{site:site.id});
   }else if(me.hits&&state.wave===0&&state.phase==='ready'&&(me.practicing||inPracticeLane(me))){
-    key='practice:'+me.practicing+':'+me.practiceWins;
+    key='practice:'+me.practicing+':'+me.practiceWins+':'+practiceSelect.value;
     label=me.practicing?'結束練習':me.practiceWins?'再挑戰一次':'挑戰練習殭屍';
-    hint=me.practicing?'面向北方找練習殭屍。離開靶區就會結束。':'可選練習 · 慢慢靠近，不會扣你的血';
-    run=()=>api('practice',{cmd:me.practicing?'cancel':'start'});
+    choosePractice=!me.practicing;
+    hint=me.practicing?'面向北方找練習對象，離開靶區會結束。':enemies[practiceSelect.value].hint+'。練習不會扣血。';
+    run=()=>api('practice',{cmd:me.practicing?'cancel':'start',type:practiceSelect.value});
   }
   if(key===fieldActionKey)return;
   fieldActionKey=key;fieldActions.hidden=!key;
+  practiceSelect.hidden=!choosePractice;
   fieldHelp.textContent=run?hint+' · 按 E 或點按鈕':hint;fieldButton.textContent=label;fieldButton.hidden=!run;
   fieldButton.onclick=run?action(async()=>{const result=await run();if(result?.message)notify(result.message);world.focus({preventScroll:true});}):null;
 }

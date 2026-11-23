@@ -58,7 +58,7 @@ function api(name,body,req){
     case 'home':home(p);break;
     case 'help':p.help=Boolean(body.on);break;
     case 'interact':return interact(r,p,body.site);
-    case 'practice':practice(r,p,body.cmd);break;
+    case 'practice':practice(r,p,body.cmd,body.type);break;
     default:fail('查無操作',404);
   }
   return {};
