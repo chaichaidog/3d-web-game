@@ -1,5 +1,6 @@
 import {identity,multiply,transform,color,bakeMesh} from './mesh.js';
 import {enemies} from './enemies.js';
+import {weapons} from './rules.js';
 export function part(out,root,kind,x,y,z,sx,sy,sz,tint,rx=0,ry=0,rz=0,alpha=1,emission=0){
   out.push({kind,matrix:multiply(root,transform(x,y,z,rx,ry,rz,sx,sy,sz)),color:color(tint,alpha),emission});
 }
@@ -135,7 +136,7 @@ export function character(out,actor,pose){
   const heavy=type==='brute'||type==='boss',sway=zombie?.08:.025;
   const root=transform(actor.x,.015+Math.abs(Math.sin(phase))*.024*speed,actor.z,0,pose.yaw,0,scale);
   part(out,root,'cylinder',0,-.005,0,.7,.008,.46,'#182c2e',0,0,0,.2);
-  const lean=actor.cue?.kind==='charge'?.62:type==='runner'?.38:type==='swarm'?.48:zombie?.2:0;
+  const lean=type==='runner'?.38+(pose.windup||0)*.24:type==='swarm'?.48:zombie?.2:0;
   const body=joint(root,0,.94,0,lean-(pose.pain||0)*.25,Math.sin(phase)*.025*speed,Math.sin(phase*.5)*sway*speed);
   mesh(out,r.body,body);
   if(r.armor&&actor.armor>0)mesh(out,r.armor,body);
@@ -152,9 +153,49 @@ export function character(out,actor,pose){
     if(!zombie&&side===1)weapon(out,joint(elbow,0,-.34,.08,-Math.PI/2),actor.weapon,pose.shot||0,0,false);
   }
 }
+const energyProfiles={
+  comet:{front:.33,body:.13,cells:2,shell:'#614238'},
+  prism:{front:.45,body:.19,cells:5,shell:'#534365'},
+  lumen:{front:.47,body:.105,cells:3,shell:'#30545a'},
+  nova:{front:.61,body:.12,cells:4,shell:'#394d6c'}
+};
+export function weaponFront(key){return energyProfiles[key]?.front??(key==='pulse'?.29:.52);}
+function energyShell(p,key,profile){
+  const {front,body,cells,shell}=profile,tint=weapons[key].tint;
+  p('wedge',0,.017,.07,body,.13,front+.04,shell);
+  p('taper',0,-.09,-.065,.07,.18,.09,'#263943',-.24);
+  p('box',0,.075,.1,body*.82,.045,front*.8,'#4e626f');
+  if(front>.4){
+    p('wedge',0,-.015,-.27,body*.77,.09,.23,shell);
+    p('box',0,-.03,-.385,body,.14,.036,'#314453');
+  }
+  for(const side of [-1,1]){
+    p('box',side*body*.46,.025,front*.5,.027,.037,front*.86,tint);
+    p('wedge',side*body*.45,.038,front*.69,.052,.082,front*.49,shell,0,0,side*.12);
+    for(let i=0;i<cells;i++)p('box',side*body*.48,.048,front*.28+i*.035,.013,.04,.017,tint,0,0,side*.18);
+  }
+  if(key==='prism'){
+    // Petal silhouette around a crystalline emitter.
+    for(const side of [-1,1]){
+      p('wedge',side*.116,.05,front-.07,.09,.08,.18,shell,0,side*.24,side*.27);
+      p('taper',side*.10,.057,front-.013,.04,.058,.08,tint,Math.PI/2);
+    }
+    p('sphere',0,.055,front-.023,.077,.073,.066,tint);
+  }else{
+    p('cylinder',0,.04,front-.05,key==='comet'?.11:.073,.085,key==='comet'?.11:.073,shell,Math.PI/2);
+    p('sphere',0,.04,front-.014,.05,.05,.046,tint);
+  }
+  if(key==='nova'){
+    p('wedge',0,.14,.11,.09,.075,.18,shell);
+    p('box',0,.146,.016,.052,.04,.009,tint);
+    p('taper',0,.04,front-.18,.125,.13,.14,'#536c8c');
+  }else if(key==='lumen')p('box',0,.095,.025,.071,.035,.056,tint);
+}
 function gunParts(key){
   const scatter=key==='scatter',rapid=key==='rapid',long=scatter||rapid,base='gun-'+key;
+  const energy=energyProfiles[key];
   const shell=build(base+'-shell',p=>{
+    if(energy){energyShell(p,key,energy);return;}
     const metal='#344953',top='#72818a',accent=scatter?'#a17a56':rapid?'#748d87':'#ac926d';
     p('wedge',0,.015,.03,.1,.105,long?.43:.23,metal);
     p('box',0,-.095,-.04,.067,.18,.086,'#263943',-.23);
@@ -188,11 +229,15 @@ function gunParts(key){
     }
   });
   const slide=build(base+'-slide',p=>{
+    if(energy){p('wedge',0,.063,.013,energy.body*.79,.055,.22,energy.shell);p('box',0,.094,.006,.029,.012,.13,weapons[key].tint);return;}
     p('wedge',0,.066,0,.095,.052,long?.32:.245,'#657882');
     for(let i=0;i<5;i++)for(const side of [-1,1])p('box',side*.049,.064,-.09+i*.016,.007,.035,.006,'#2d444e');
     p('box',.048,.064,.03,.009,.026,.053,'#253942');
   });
-  const mag=build(base+'-mag',p=>p('wedge',0,-.12,rapid?.08:-.044,rapid?.068:.058,rapid?.23:.16,rapid?.095:.067,'#344b56',rapid?.18:-.23));
+  const mag=build(base+'-mag',p=>{
+    if(energy){p('taper',0,-.105,.045,.085,.145,.12,energy.shell);p('box',.042,-.112,.043,.014,.073,.063,weapons[key].tint);return;}
+    p('wedge',0,-.12,rapid?.08:-.044,rapid?.068:.058,rapid?.23:.16,rapid?.095:.067,'#344b56',rapid?.18:-.23);
+  });
   const hand=build('gloved-hand',p=>{
     p('wedge',0,0,0,.105,.12,.145,'#526775');
     for(let i=0;i<3;i++)p('box',-.04+i*.031,-.032,.07,.025,.05,.018,'#344b58');
@@ -207,20 +252,22 @@ function gunParts(key){
   return {shell,slide,mag,hand,sleeve};
 }
 const guns=new Map();
-export function weapon(out,root,key='pulse',kick=0,reload=0,first=true){
-  if(!guns.has(key))guns.set(key,gunParts(key));const g=guns.get(key),long=key!=='pulse';
-  const gun=joint(root,0,-reload*.12,-kick*.075,kick*.16+reload*.65,0,-reload*.35);
-  mesh(out,g.shell,gun);mesh(out,g.slide,joint(gun,0,0,-kick*.065));mesh(out,g.mag,joint(gun,0,-reload*.2,0,0,0,reload*.15));
+export function weapon(out,root,key='pulse',kick=0,reload={},first=true){
+  if(!guns.has(key))guns.set(key,gunParts(key));const g=guns.get(key),long=weaponFront(key)>.4;
+  const {dip=0,cell=0,hand=0}=reload;
+  const gun=joint(root,0,-dip*.11,-kick*.068,kick*.18+dip*.54,0,-dip*.33);
+  mesh(out,g.shell,gun);mesh(out,g.slide,joint(gun,0,0,-kick*.06));mesh(out,g.mag,joint(gun,-cell*.025,-cell*.19,0,0,0,cell*.24));
   if(first){
     mesh(out,g.hand,joint(gun,.035,-.11,-.045,-.2,0,-.1));
     mesh(out,g.sleeve,joint(gun,.105,-.22,-.19,-.95,0,-.35));
-    mesh(out,g.hand,joint(gun,-.045,-.065,long?.2:.04,-.15,.5,.25));
-    mesh(out,g.sleeve,joint(gun,-.14,-.17,long?.09:-.02,-.85,0,.55));
+    mesh(out,g.hand,joint(gun,-.045-hand*.015,-.065-hand*.19,(long?.2:.04)-hand*.12,-.15-hand*.3,.5,.25+hand*.22));
+    mesh(out,g.sleeve,joint(gun,-.14,-.17-hand*.13,(long?.09:-.02)-hand*.1,-.85-hand*.22,0,.55));
   }
+  return gun;
 }
-export function muzzle(out,root,size=.12,age=0){
+export function muzzle(out,root,size=.12,age=0,tint='#e1c99e'){
   const amount=Math.max(0,1-age/.07);if(!amount)return;
-  part(out,root,'sphere',0,0,0,size*amount,size*.7*amount,size*1.4*amount,'#e1c99e',0,0,0,.8,.9);
-  part(out,root,'cone',0,0,.06,size*.5*amount,size*2.4*amount,size*.5*amount,'#b7946e',Math.PI/2,0,0,.65,1);
+  part(out,root,'sphere',0,0,0,size*amount,size*.7*amount,size*1.4*amount,tint,0,0,0,.8,.9);
+  part(out,root,'cone',0,0,.06,size*.5*amount,size*2.4*amount,size*.5*amount,tint,Math.PI/2,0,0,.65,1);
 }
 export {landscape} from './world-models.js';

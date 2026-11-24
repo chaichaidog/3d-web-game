@@ -85,6 +85,7 @@ export function buy(p,key){
     if(p.coins<item.price)throw Error('金幣不足');
     p.coins-=item.price;p.owned.push(key);p.gear=true;
   }
+  if(p.weapon!==key)p.epoch++;
   p.weapon=key;p.ammo=item.cap;p.reload=0;
 }
 function spawnEnemy(type,x,z,yaw,players=1){
@@ -131,9 +132,9 @@ export function control(r,cmd,mode){
 function shoot(r,p) {
   if(p.reload>0||p.delay>0||p.ammo<=0||safe(p.x,p.z))return;
   const w=weapons[p.weapon];p.delay=w.delay;p.ammo--;p.shot++;
-  for(const delta of w.spread?[-w.spread,0,w.spread]:[0]){
+  for(const delta of w.rays){
     const candidates=p.practice?[p.practice]:r.phase==='ready'?[...r.enemies,...targets]:r.enemies;
-    const {nearest,...ray}=traceShot(p,candidates,delta);
+    const {nearest,...ray}=traceShot(p,candidates,delta,w.range);
     const shot={...ray,id:p.id+':'+p.shot+':'+delta,owner:p.id,weapon:p.weapon,t:.8,impact:nearest?nearest.type?'enemy':'target':'none'};
     r.shots.push(shot);
     if(!nearest)continue;
@@ -157,13 +158,13 @@ function shoot(r,p) {
 function runPlayer(r,p,dt){
   const active=Date.now()-p.seen<1800;
   p.delay=Math.max(0,p.delay-dt);
-  if(p.reload>0){p.reload-=dt;if(p.reload<=0)p.ammo=weapons[p.weapon].cap;}
+  if(p.reload>0){p.reload=Math.max(0,p.reload-dt);if(p.reload===0)p.ammo=weapons[p.weapon].cap;}
   if(p.editor||!p.code.loop||!active){p.tap=false;return;}
   const commands=commandsFor(p.code,inputMask(p.keys,p.tap),p.hp,p.ammo);p.tap=false;
   if(!p.sampled)move(p,commands,p.yaw,dt);
   if(!safe(p.x,p.z))p.walked=true;
   if(commands.has('fire'))shoot(r,p);
-  if(commands.has('reload')&&p.reload<=0&&p.ammo<weapons[p.weapon].cap)p.reload=1;
+  if(commands.has('reload')&&p.reload<=0&&p.ammo<weapons[p.weapon].cap)p.reload=weapons[p.weapon].reloadTime;
   if(commands.has('heal')&&p.kits>0&&p.hp<100){p.hp=Math.min(100,p.hp+45);p.kits--;}
 }
 function moveEnemy(e,dx,dz){

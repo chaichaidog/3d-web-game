@@ -1,5 +1,6 @@
 import {Renderer,identity,transform,multiply,cameraMatrix,rendererQuality} from './mesh.js';
-import {part,joint,character,weapon,muzzle,landscape} from './models.js';
+import {part,joint,character,weapon,weaponFront,muzzle,landscape} from './models.js';
+import {reloadPose} from './feedback.js';
 import {core,targets,weapons} from './rules.js';
 import {traceShot} from './aim.js';
 import {landmarks} from './world.js';
@@ -14,17 +15,17 @@ function getView(canvas){
   return views.get(canvas);
 }
 export function localShot(canvas,state,player){
-  const v=getView(canvas),now=performance.now()/1000,spread=weapons[player.weapon].spread;
+  const v=getView(canvas),now=performance.now()/1000,spec=weapons[player.weapon];
   const enemies=state.enemies.filter(enemy=>isPracticeVisible(enemy,player));
   const candidates=!player.practicing&&state.phase==='ready'?[...enemies,...targets]:enemies;
-  for(const delta of spread?[-spread,0,spread]:[0]){
-    const {nearest,...ray}=traceShot(player,candidates,delta);
-    v.traces.push({...ray,born:now,local:true,yaw:player.yaw});
+  for(const delta of spec.rays){
+    const {nearest,...ray}=traceShot(player,candidates,delta,spec.range);
+    v.traces.push({...ray,weapon:player.weapon,born:now,local:true,yaw:player.yaw});
   }
 }
 function poseFor(v,actor,dt){
   let pose=v.poses.get(actor.id);
-  if(!pose){pose={x:actor.x,z:actor.z,yaw:actor.yaw||0,phase:0,speed:0,hit:actor.hit||0,attackCount:actor.attack||0,pain:0,attack:0,shotCount:actor.shot||0,shot:0};v.poses.set(actor.id,pose);}
+  if(!pose){pose={x:actor.x,z:actor.z,yaw:actor.yaw||0,phase:0,speed:0,hit:actor.hit||0,attackCount:actor.attack||0,pain:0,attack:0,windup:0,shotCount:actor.shot||0,shot:0};v.poses.set(actor.id,pose);}
   const distance=Math.hypot(actor.x-pose.x,actor.z-pose.z);
   const speed=dt>0?Math.min(distance/dt,8):0;
   pose.speed+=(speed-pose.speed)*(1-Math.exp(-12*dt));
@@ -32,6 +33,7 @@ function poseFor(v,actor,dt){
   pose.x=actor.x;pose.z=actor.z;
   const targetYaw=actor.yaw??pose.yaw,diff=targetYaw-pose.yaw;
   pose.yaw+=Math.atan2(Math.sin(diff),Math.cos(diff))*(1-Math.exp(-12*dt));
+  pose.windup+=(Number(actor.cue?.kind==='charge')-pose.windup)*(1-Math.exp(-10*dt));
   if((actor.hit||0)>pose.hit){pose.pain=1;pose.hit=actor.hit;}
   if((actor.attack||0)>pose.attackCount){pose.attack=1;pose.attackCount=actor.attack;}
   if((actor.shot||0)>pose.shotCount){pose.shot=1;pose.shotCount=actor.shot;}
@@ -179,7 +181,8 @@ export function scene(canvas,state,me,view=me,first=true){
     const age=(now-t.born)/.14,progress=Math.min(1,age*3),tail=Math.max(0,progress-.28);
     const sx=t.x+Math.cos(t.yaw)*.16,sz=t.z-Math.sin(t.yaw)*.16,sy=1.21;
     const point=a=>[sx+(t.tx-sx)*a,sy+(t.y-sy)*a,sz+(t.tz-sz)*a];
-    beam(out,point(tail),point(progress),.014,'#cbb58f',Math.max(0,1-age));
+    const spec=weapons[t.weapon]||weapons.pulse;
+    beam(out,point(tail),point(progress),.012+spec.kick*.008,spec.tint,Math.max(0,1-age));
   }
   for(const s of v.sparks){
     const age=now-s.born;part(out,root,'sphere',s.x+s.vx*age,s.y+s.vy*age-3*age*age,s.z+s.vz*age,.035,.035,.035,s.tint,0,0,0,1-age/.32,1);
@@ -191,13 +194,24 @@ export function scene(canvas,state,me,view=me,first=true){
   const matrix=cameraMatrix(...eye,view.yaw,view.pitch,aspect);
   v.renderer.render(out,matrix,eye);labels(v,canvas,state,me,matrix);
   if(first){
-    const weaponObjects=[],kick=view.kick??0,move=Math.min(v.speed/4.5,1);
-    const reload=me.reload>0?Math.sin((1-me.reload)*Math.PI):0;
-    const sway=Math.sin(v.walk)*.008*move,breath=Math.sin(v.time*1.8)*.0025;
-    const weaponRoot=transform(.22+sway,-.205+breath+Math.cos(v.walk*2)*.005*move,me.weapon==='pulse'?.6:.76,-.035,-.11,-.025-sway*1.3);
-    weapon(weaponObjects,weaponRoot,me.weapon,kick,reload);
+    const weaponObjects=[],kick=view.kick??0,move=Math.min(v.speed/4.5,1),front=weaponFront(me.weapon),spec=weapons[me.weapon];
+    const progress=view.reloadProgress??(me.reload>0?1-me.reload/spec.reloadTime:null);
+    const reload=reloadPose(progress);
+    const drift=v.gunSway??={yaw:view.yaw,pitch:view.pitch,x:0,y:0,equip:1,key:me.weapon};
+    if(drift.key!==me.weapon){drift.key=me.weapon;drift.equip=0;}
+    drift.equip=Math.min(1,drift.equip+dt*4.5);
+    const delta=view.yaw-drift.yaw,turn=Math.atan2(Math.sin(delta),Math.cos(delta));
+    const blend=1-Math.exp(-13*dt);
+    drift.x+=(Math.max(-.024,Math.min(.024,-turn*1.4))-drift.x)*blend;
+    drift.y+=(Math.max(-.016,Math.min(.016,(drift.pitch-view.pitch)*1.25))-drift.y)*blend;
+    drift.yaw=view.yaw;drift.pitch=view.pitch;
+    const rising=(1-drift.equip)**2;
+    const sway=Math.sin(v.walk)*.012*move,breath=Math.sin(v.time*1.8)*.0025;
+    const bob=(Math.cos(v.walk*2)-1)*.006*move;
+    const weaponRoot=transform(.22+sway+drift.x,-.205+breath+bob+drift.y-rising*.22,front>.4?.76:.6,-.035+rising*.5,-.11+drift.x,-.025-sway*1.3);
+    const gun=weapon(weaponObjects,weaponRoot,me.weapon,kick,reload);
     const flashAge=now-(view.lastFire??-10);
-    if(flashAge<.07)muzzle(weaponObjects,joint(weaponRoot,0,.035,me.weapon==='pulse'?.29:.52),me.weapon==='scatter'?.11:.075,flashAge);
+    if(flashAge<.07)muzzle(weaponObjects,joint(gun,0,.04,front),.057+spec.kick*.052,flashAge,spec.tint);
     v.renderer.render(weaponObjects,cameraMatrix(0,0,0,0,0,aspect),[0,0,0],false);
   }
   if(now-(v.lastStats||0)>1){v.lastStats=now;canvas.dataset.parts=String(out.length);canvas.dataset.resolution=canvas.width+'×'+canvas.height;}

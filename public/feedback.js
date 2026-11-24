@@ -1,25 +1,43 @@
-import {safe,weapons} from './rules.js';
+import {safe,weapons,clamp} from './rules.js';
 import {commandsFor} from './motion.js';
+const smooth=(start,end,value)=>{const t=clamp((value-start)/(end-start),0,1);return t*t*(3-2*t);};
+export function reloadPose(progress){
+  if(progress==null)return {dip:0,cell:0,hand:0};
+  return {
+    dip:smooth(0,.22,progress)*(1-smooth(.72,1,progress)),
+    cell:smooth(.18,.48,progress)*(1-smooth(.53,.82,progress)),
+    hand:smooth(.12,.43,progress)*(1-smooth(.65,.94,progress))
+  };
+}
 export class GunFeedback {
-  constructor(){this.epoch=-1;this.predicted=0;this.next=0;this.kick=0;this.velocity=0;this.lastFire=-10;this.weapon='pulse';}
-  sync(player){
+  constructor(){this.epoch=-1;this.predicted=0;this.next=0;this.kick=0;this.velocity=0;this.lastFire=-10;this.weapon='pulse';this.reloadStart=null;this.reload=0;}
+  sync(player,now=performance.now()/1000){
     if(player.epoch!==this.epoch||player.weapon!==this.weapon){
-      this.predicted=player.shot;this.next=0;this.kick=0;this.velocity=0;
+      this.predicted=player.shot;this.next=0;this.kick=0;this.velocity=0;this.reloadStart=null;this.reload=0;this.lastFire=-10;
     }
-    if(player.reload>0&&!(this.reload>0))this.predicted=player.shot;
+    if(player.reload>0&&(!this.reload||this.reloadStart===null)){
+      this.reloadStart=now-Math.max(0,weapons[player.weapon].reloadTime-player.reload);
+      this.predicted=player.shot;
+    }
     this.reload=player.reload;
     this.epoch=player.epoch;this.weapon=player.weapon;this.predicted=Math.max(this.predicted,player.shot);
   }
+  reloadProgress(now){
+    if(this.reloadStart===null)return null;
+    return clamp((now-this.reloadStart)/weapons[this.weapon].reloadTime,0,1);
+  }
   update(dt,now,player,code,mask,enabled){
-    // Critically damped spring keeps recoil continuous across frames.
-    this.velocity+=(-150*this.kick-22*this.velocity)*dt;
-    this.kick=Math.max(0,this.kick+this.velocity*dt);
+    // Analytic spring has the same response across different frame rates.
+    const rate=15,decay=Math.exp(-rate*dt),slope=this.velocity+rate*this.kick;
+    this.kick=(this.kick+slope*dt)*decay;
+    this.velocity=(this.velocity-rate*slope*dt)*decay;
     if(!enabled||safe(player.x,player.z)||player.reload>0||now<this.next)return false;
     const available=player.ammo-Math.max(0,this.predicted-player.shot);
     if(available<=0||!commandsFor(code,mask,player.hp,available).has('fire'))return false;
     this.predicted++;this.next=now+weapons[player.weapon].delay;this.lastFire=now;
-    this.velocity+=player.weapon==='scatter'?8:player.weapon==='rapid'?3.4:5.3;
-    this.kick+=.16;return true;
+    const strength=weapons[player.weapon].kick;
+    this.velocity+=strength*13;
+    this.kick=Math.min(1.3,this.kick+strength*.19);return true;
   }
 }
 let context=null,noise=null,enabled=true;

@@ -134,7 +134,7 @@ function receiveState(s,serverTime){
       if(prev&&s.wave>prev.wave)notify('第 '+s.wave+' 波 · '+s.message);
       if(!prev){yaw=me.yaw;pitch=me.pitch;}
       motion.reconcile(me,active,state.phase==='paused');
-      gun.sync(me);
+      gun.sync(me,now/1000);
       const earlier=prev?.players.find(p=>p.id===session.id);
       if(earlier&&(me.discovered?.length||0)>(earlier.discovered?.length||0))notify('發現新區域！+2 金幣 · 探索 '+me.discovered.length+'/4');
       if(earlier?.practicing&&!me.practicing&&me.practiceWins>earlier.practiceWins)notify('練習成功！可以去探索，或請老師開第一波。');
@@ -201,7 +201,7 @@ function frame(now){
       const gap=lastDraw?now-lastDraw:16;lastDraw=now;draws++;
       const mark=now<hitUntil?'✳':'＋';if($('reticle').textContent!==mark)$('reticle').textContent=mark;
       $('reticle').style.transform='translate(-50%,-50%) scale('+(1+gun.kick*.35)+')';
-      scene(world,betweenSnapshots(now),{...me,...camera},{yaw,pitch,kick:gun.kick,lastFire:gun.lastFire,frameMs:gap});
+      scene(world,betweenSnapshots(now),{...me,...camera},{yaw,pitch,kick:gun.kick,lastFire:gun.lastFire,reloadProgress:gun.reloadProgress(now/1000),frameMs:gap});
       if(world.dataset.error)$('task').textContent=world.dataset.error;
     }
     if(now-perfAt>1500){
@@ -303,6 +303,10 @@ function shop(){
   $('panelTitle').textContent='基地補給站';const host=$('panelBody');host.replaceChildren(make('p','錢包　◈ '+me.coins+'　｜　醫療包 '+me.kits));
   for(const [key,data] of [...Object.entries(weapons),['kit',{name:'醫療包',price:5,desc:'搭配「使用補包」廣播恢復 45 生命。'}]]){
     const row=make('div',undefined,'shelf'),info=make('div');info.append(make('b',data.name),make('p',data.desc));const owned=me.owned.includes(key),equipped=me.weapon===key;
+    if(data.cap){
+      info.append(make('p',`彈量 ${data.cap}　·　射程 ${data.range} m　·　換彈 ${data.reloadTime} 秒`,'weapon-stats'));
+      row.style.borderInlineStart='3px solid '+data.tint;
+    }
     const b=make('button',equipped?'已裝備':owned?'裝備':'◈ '+data.price+'　購買');b.disabled=equipped||(!owned&&me.coins<data.price);
     b.onclick=action(async()=>{b.disabled=true;await api('shop',{item:key});await new Promise(ok=>setTimeout(ok,200));if(panels.open)shop();notify('裝備已更新');});row.append(info,b);host.append(row);
   }

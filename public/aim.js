@@ -1,8 +1,8 @@
 import {wallDistance} from './world.js';
 import {enemies} from './enemies.js';
-export function traceShot(player,candidates,delta=0){
+export function traceShot(player,candidates,delta=0,range=45){
   const angle=player.yaw+delta,dx=Math.sin(angle),dz=Math.cos(angle);
-  let nearest=null,distance=wallDistance(player.x,player.z,dx,dz,player.pitch);
+  let nearest=null,distance=wallDistance(player.x,player.z,dx,dz,player.pitch,range);
   for(const obj of candidates){
     const ex=obj.x-player.x,ez=obj.z-player.z,along=ex*dx+ez*dz;
     const spec=enemies[obj.type];
