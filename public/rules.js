@@ -17,6 +17,8 @@ export const weapons = {
   nova:{name:'星核長射器',price:45,damage:49,delay:.95,cap:4,rays:[0],range:68,reloadTime:1.5,kick:1.18,tint:'#9ecbff',desc:'射程最遠、單發威力最高，開火與換彈間隔也較長。'}
 };
 export const core = {x:0,z:12};
+export const waveSettings = {defaultLimit:5,maxLimit:20,breakSeconds:20};
+export const feedbackLimit = 400;
 export const targets = [{x:-3,z:8},{x:0,z:9},{x:3,z:8}];
 export const safe = (x,z) => Math.hypot(x,z) <= 5;
 export function program(value) {

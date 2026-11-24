@@ -41,6 +41,11 @@
 #reticle{top:50%;left:50%;transform:translate(-50%,-50%);text-shadow:0 0 4px #1d2632;font-weight:bold}nav,.tools{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
 .hint,.muted{color:var(--muted);font-size:14px}
 .tools{align-items:center}
+.wave-setup{display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px;margin-top:14px;padding:10px 13px;border:1px solid var(--line);border-radius:8px;background:#202b38}
+.wave-setup label{margin:0;display:flex;align-items:center;gap:7px}.wave-setup input{display:inline-block;width:auto;margin:0;accent-color:#8baac6}.wave-setup input[type=number]{width:68px;padding:7px}
+#feedbackPage{padding:24px 4vw}.feedback-card{max-width:650px;margin:24px auto;padding:clamp(16px,4vw,32px);background:#202b38;border:1px solid var(--line);border-radius:10px}
+.feedback-card h1{margin:0}.feedback-card textarea{display:block;width:100%;margin-top:6px;padding:10px;border:1px solid #697f91;border-radius:6px;background:#18232e;color:var(--ink);font:inherit;resize:vertical}.feedback-card textarea:focus-visible{outline:2px solid #a9bed3;outline-offset:2px}#feedbackStatus{min-height:1.5em;margin-bottom:0;color:#d5dfac}
+#teacherFeedback{margin:16px 0 20px;padding:14px;background:#1d2a37;border:1px solid var(--line);border-radius:8px}#teacherFeedback h2{margin:0;font-size:21px}#feedbackList{display:grid;gap:9px;grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr))}.feedback-reply{padding:11px 13px;background:#2a3949;border-radius:7px}.feedback-reply h3{margin:0 0 8px}.feedback-reply p{white-space:pre-wrap;overflow-wrap:anywhere;margin:5px 0 12px}
 #roomTitle{font-size:19px;color:var(--accent)}
 #cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(330px,100%),1fr));gap:12px}
 .card,.shelf{padding:16px;border:1px solid var(--line);border-radius:8px;background:#222d3a}

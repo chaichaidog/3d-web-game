@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {fresh,program,core,targets,weapons,safe,clamp,sensors} from './public/rules.js';
+import {fresh,program,core,targets,weapons,safe,clamp,sensors,waveSettings,feedbackLimit} from './public/rules.js';
 import {inputMask,commandsFor,move} from './public/motion.js';
 import {traceShot} from './public/aim.js';
 import {WORLD_LIMIT,landmarks,blocked,moveWorld,wallDistance,pathTo} from './public/world.js';
@@ -8,7 +8,9 @@ import {enemies,waveTypes,waveOrder,pulseRange,rallyRange} from './public/enemie
 const routes=new WeakMap();
 const abilities=new WeakMap();
 export function room(code) {
-  return {code, mode:'survival', phase:'ready', wave:0, coreHp:100, kills:0, players:new Map(), enemies:[], shots:[], fallen:[], activities:{}, teamNews:null, message:'集合完畢後，老師可以開始第一波。', touched:Date.now()};
+  return {code, mode:'survival', phase:'ready', wave:0, coreHp:100, kills:0, players:new Map(), enemies:[], shots:[], fallen:[], activities:{}, teamNews:null,
+    autoWaves:true,waveLimit:waveSettings.defaultLimit,breakLeft:0,pausedFrom:null,completed:false,
+    message:'集合完畢後，老師可以開始第一波。', touched:Date.now()};
 }
 export function player(name){
   return {id:randomUUID(),name,x:0,z:0,yaw:0,pitch:0,hp:100,coins:0,weapon:'pulse',owned:['pulse'],ammo:12,kits:1,
@@ -94,10 +96,12 @@ function spawnEnemy(type,x,z,yaw,players=1){
 }
 export function nextWave(r) {
   if(r.phase==='active'||r.phase==='paused')throw Error('請先完成本波');
+  if(r.phase==='finished')throw Error('本次挑戰已結束');
   const retry=r.phase==='lost';
+  if(!retry&&r.wave>=r.waveLimit)throw Error('已達波次上限');
   if(!retry)r.wave++;
   for(const p of r.players.values())p.practice=null;
-  r.phase='active';r.coreHp=100;r.enemies=[];r.fallen=[];r.shots=[];
+  r.phase='active';r.breakLeft=0;r.coreHp=100;r.enemies=[];r.fallen=[];r.shots=[];
   const site=landmarks[(r.wave-1)%landmarks.length];
   r.cache=r.mode==='survival'?{x:site.x+2,z:site.z+2,claimed:false,name:site.name}:null;
   const count=Math.max(1,[...r.players.values()].filter(p=>Date.now()-p.seen<15000).length);
@@ -119,13 +123,43 @@ export function nextWave(r) {
   const featured=r.wave%5===0?'boss':waveOrder[r.wave-1];
   r.message=featured?enemies[featured].name+' · '+enemies[featured].hint:'準備迎接混合怪群';
 }
-export function control(r,cmd,mode){
+function finishRound(r,completed){
+  r.phase='finished';r.completed=completed;r.breakLeft=0;r.pausedFrom=null;
+  r.enemies=[];r.fallen=[];r.shots=[];
+  for(const p of r.players.values()){
+    p.practice=null;p.keys=[];p.tap=false;p.epoch++;
+  }
+  r.message=completed?'挑戰完成！請寫下本次課堂回饋。':'老師已結束挑戰，請寫下本次課堂回饋。';
+}
+export function submitFeedback(r,p,body){
+  if(r.phase!=='finished')throw Error('挑戰結束後才能送出回饋');
+  const learning=typeof body.learning==='string'?body.learning.trim():'';
+  const suggestion=typeof body.suggestion==='string'?body.suggestion.trim():'';
+  if(!learning)throw Error('請先寫下你學到什麼，或哪裡卡住');
+  if(learning.length>feedbackLimit||suggestion.length>feedbackLimit)throw Error(`每題最多 ${feedbackLimit} 字`);
+  p.feedback={learning,suggestion};
+  return p.feedback;
+}
+export function control(r,cmd,mode,settings={}){
   if(cmd==='next')return nextWave(r);
-  if(cmd==='pause'&&['paused','active'].includes(r.phase)){r.phase=r.phase==='active'?'paused':'active';for(const p of r.players.values())p.epoch++;return;}
+  if(r.phase==='finished')throw Error('本次挑戰已結束，請開新教室再玩');
+  if(cmd==='settings'){
+    if(r.phase!=='ready')throw Error('請在第一波開始前設定波次');
+    const {autoWaves,waveLimit}=settings;
+    if(typeof autoWaves!=='boolean'||!Number.isInteger(waveLimit)||waveLimit<1||waveLimit>waveSettings.maxLimit)throw Error(`波次上限請填 1–${waveSettings.maxLimit} 的整數`);
+    Object.assign(r,{autoWaves,waveLimit});return;
+  }
+  if(cmd==='finish'){finishRound(r,false);return;}
+  if(cmd==='pause'&&(r.phase==='paused'||r.phase==='active'||(r.phase==='clear'&&r.breakLeft>0))){
+    if(r.phase==='paused'){r.phase=r.pausedFrom;r.pausedFrom=null;}
+    else{r.pausedFrom=r.phase;r.phase='paused';}
+    for(const p of r.players.values())p.epoch++;
+    return;
+  }
   if(cmd==='recall'){for(const p of r.players.values())home(p);return;}
   if(cmd==='mode'&&['survival','defense'].includes(mode)){
     for(const p of r.players.values())p.practice=null;
-    r.mode=mode;r.wave=0;r.enemies=[];r.fallen=[];r.shots=[];r.cache=null;r.coreHp=100;r.phase='ready';r.message='已切換模式，裝備與積木已保留。';return;
+    r.mode=mode;r.wave=0;r.breakLeft=0;r.pausedFrom=null;r.enemies=[];r.fallen=[];r.shots=[];r.cache=null;r.coreHp=100;r.phase='ready';r.message='已切換模式，裝備與積木已保留。';return;
   }
   throw Error('現在無法使用此操作');
 }
@@ -221,6 +255,7 @@ function specialMove(r,e,target,distance,dt,obstructed,outside){
   return false;
 }
 export function tick(r,dt){
+  if(r.phase==='finished')return;
   if(r.phase==='paused'){for(const p of r.players.values())p.tap=false;return;}
   r.shots=r.shots.filter(s=>(s.t-=dt)>0);
   r.fallen=r.fallen.filter(s=>(s.t-=dt)>0);
@@ -243,8 +278,20 @@ export function tick(r,dt){
       }
     }
   }
+  if(r.phase==='clear'&&r.breakLeft>0){
+    // Wait for a connected learner so a whole lesson does not advance in an empty room.
+    if([...r.players.values()].some(p=>Date.now()-p.seen<5000)){
+      r.breakLeft=Math.max(0,r.breakLeft-dt);
+      if(r.breakLeft<1e-6)nextWave(r);
+    }
+    return;
+  }
   if(r.phase!=='active')return;
-  if(!r.enemies.length){r.phase='clear';r.message='本波完成！回基地補給，再挑戰下一波。';return;}
+  if(!r.enemies.length){
+    if(r.wave>=r.waveLimit){finishRound(r,true);return;}
+    r.phase='clear';r.breakLeft=r.autoWaves?waveSettings.breakSeconds:0;
+    r.message='本波完成！回基地補給，再挑戰下一波。';return;
+  }
   const outside=[...r.players.values()].filter(p=>!safe(p.x,p.z)&&Date.now()-p.seen<5000);
   if(r.cache&&!r.cache.claimed&&outside.some(p=>Math.hypot(p.x-r.cache.x,p.z-r.cache.z)<1.8)){
     r.cache.claimed=true;for(const p of r.players.values())p.kits++;
@@ -281,11 +328,13 @@ export function tick(r,dt){
 }
 export function snapshot(r,id,teacher=false){
   const training=[...r.players.values()].filter(p=>p.practice&&(teacher||p.id===id)).map(p=>p.practice);
-  return {code:r.code,mode:r.mode,phase:r.phase,wave:r.wave,coreHp:r.coreHp,kills:r.kills,message:r.message,cache:r.cache,activities:r.activities,teamNews:r.teamNews,enemies:[...r.enemies,...training],shots:r.shots,fallen:r.fallen.filter(e=>!e.practiceOwner||teacher||e.practiceOwner===id),
+  return {code:r.code,mode:r.mode,phase:r.phase,wave:r.wave,coreHp:r.coreHp,kills:r.kills,message:r.message,cache:r.cache,activities:r.activities,teamNews:r.teamNews,
+    autoWaves:r.autoWaves,waveLimit:r.waveLimit,breakSeconds:Math.ceil(r.breakLeft),completed:r.completed,enemies:[...r.enemies,...training],shots:r.shots,fallen:r.fallen.filter(e=>!e.practiceOwner||teacher||e.practiceOwner===id),
     players:[...r.players.values()].map(p=>{
       const {id:pid,name,x,z,yaw,pitch,hp,weapon,shot,hit,editor,help}=p;
       const basic={id:pid,name,x,z,yaw,pitch,hp,weapon,shot,hit,editor,help,online:Date.now()-p.seen<5000};
       if(pid===id||teacher)Object.assign(basic,{epoch:p.epoch,ack:p.ack,coins:p.coins,kits:p.kits,owned:p.owned,ammo:p.ammo,reload:p.reload,walked:p.walked,hits:p.hits,gear:p.gear,discovered:p.discovered,ammoCacheUsed:p.ammoCacheUsed,practicing:Boolean(p.practice),practiceWins:p.practiceWins});
+      if(pid===id||teacher)basic.feedback=p.feedback||null;
       if(teacher)Object.assign(basic,{draft:p.draft,code:p.code});
       return basic;
     })};

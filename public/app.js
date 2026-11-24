@@ -1,4 +1,4 @@
-import {actions,sensors,weapons,safe,fresh,clamp,program} from './rules.js';
+import {actions,sensors,weapons,safe,fresh,clamp,program,waveSettings,feedbackLimit} from './rules.js';
 import {cover,scene,localShot,setQuality} from './view.js';
 import {LiveConnection} from './network.js';
 import {SnapshotTimeline} from './timeline.js';
@@ -133,7 +133,7 @@ function receiveState(s,serverTime){
     if(me){
       if(prev&&s.wave>prev.wave)notify('第 '+s.wave+' 波 · '+s.message);
       if(!prev){yaw=me.yaw;pitch=me.pitch;}
-      motion.reconcile(me,active,state.phase==='paused');
+      motion.reconcile(me,active,['paused','finished'].includes(state.phase));
       gun.sync(me,now/1000);
       const earlier=prev?.players.find(p=>p.id===session.id);
       if(earlier&&(me.discovered?.length||0)>(earlier.discovered?.length||0))notify('發現新區域！+2 金幣 · 探索 '+me.discovered.length+'/4');
@@ -143,17 +143,51 @@ function receiveState(s,serverTime){
       if(prev&&me.hit>confirmedHits){hitUntil=performance.now()+180;sound('hit',me.weapon);}
       confirmedHits=me.hit;
       if(!walked&&(me.walked||Math.hypot(me.x,me.z)>.55)){walked=true;sessionStorage.setItem('outpost.walked.'+session.id,'yes');}
+      if(s.phase==='finished')showFeedback();
     }
     if(networkError){networkError=false;$('status').textContent='已重新連線 ／ '+s.code;}
-    if(now-lastHud>180){lastHud=now;if(session.teacher)monitor();else if(me){hud();refreshGuide();}}
+    if(now-lastHud>180){lastHud=now;if(session.teacher)monitor();else if(me&&s.phase!=='finished'){hud();refreshGuide();}}
 }
-const phaseLabel={ready:'準備中',active:'交戰中',paused:'已暫停',clear:'本波完成',lost:'可重試'};
+const phaseLabel={ready:'準備中',active:'交戰中',paused:'已暫停',clear:'本波完成',lost:'可重試',finished:'已結束'};
+function waveProgress(){
+  const progress=`第 ${state.wave} / ${state.waveLimit} 波 · ${phaseLabel[state.phase]}`;
+  if(state.phase==='clear'&&state.breakSeconds>0)return progress+` · ${state.breakSeconds} 秒後開始下一波`;
+  if(state.phase==='paused'&&state.breakSeconds>0)return progress+` · 休息倒數停在 ${state.breakSeconds} 秒`;
+  return progress;
+}
+const feedbackLearning=$('feedbackLearning'),feedbackSuggestion=$('feedbackSuggestion');
+feedbackLearning.maxLength=feedbackSuggestion.maxLength=feedbackLimit;
+function showFeedback(){
+  if(!$('feedbackPage').hidden)return;
+  if(panels.open)panels.close();
+  document.exitPointerLock?.();resetKeys();
+  $('game').hidden=true;$('feedbackPage').hidden=false;
+  $('feedbackResult').textContent=state.completed?`你們完成了 ${state.wave} 波挑戰！`:`老師已結束本次挑戰（第 ${state.wave} / ${state.waveLimit} 波）。`;
+  feedbackLearning.value=me.feedback?.learning||'';
+  feedbackSuggestion.value=me.feedback?.suggestion||'';
+  if(me.feedback)feedbackSent();
+  feedbackLearning.focus();
+}
+function feedbackSent(){
+  $('feedbackStatus').textContent='回饋已送出，老師看得到了。你也可以修改後再送出。';
+  $('submitFeedback').textContent='更新回饋';
+}
+$('feedbackForm').onsubmit=async event=>{
+  event.preventDefault();
+  const button=$('submitFeedback');button.disabled=true;
+  $('feedbackStatus').textContent='正在送出回饋…';
+  try{
+    await api('feedback',{learning:feedbackLearning.value,suggestion:feedbackSuggestion.value});
+    feedbackSent();
+  }catch(error){$('feedbackStatus').textContent=error.message;}
+  finally{button.disabled=false;}
+};
 function hud(){
   const isSafe=safe(me.x,me.z);
   $('hud').textContent=(isSafe?'安全區':'野外')+'　♥ '+me.hp+'　◈ '+me.coins+'　'+weapons[me.weapon].name+'　'+(me.reload>0?'換彈中':me.ammo+'/'+weapons[me.weapon].cap);
   const exploring=state.mode==='survival'&&state.phase!=='active'&&(me.discovered?.length||0)<4;
   const mission=!me.walked?'走出基地光圈':!me.hits?'命中任一練習靶':exploring?'沿地圖找集合點，探索 '+(me.discovered?.length||0)+'/4':!state.kills?'和全隊擊敗一隻殭屍':!me.gear?'回商店買一把新武器':'自由挑戰：加入自動換彈或衝刺';
-  $('task').textContent=me.practicing?'練習挑戰 · 試試你寫的射擊積木':(guideHidden||me.hits?'任務　'+mission+'　｜　':'')+'第 '+state.wave+' 波 · '+phaseLabel[state.phase]+(state.mode==='defense'?'　發電機 '+state.coreHp+'%':state.cache&&state.phase==='active'?(state.cache.claimed?'　已取得補給':'　'+state.cache.name+'補給 '+Math.round(Math.hypot(me.x-state.cache.x,me.z-state.cache.z))+' m'):'');
+  $('task').textContent=me.practicing?'練習挑戰 · 試試你寫的射擊積木':(guideHidden||me.hits?'任務　'+mission+'　｜　':'')+waveProgress()+(state.mode==='defense'?'　發電機 '+state.coreHp+'%':state.cache&&state.phase==='active'?(state.cache.claimed?'　已取得補給':'　'+state.cache.name+'補給 '+Math.round(Math.hypot(me.x-state.cache.x,me.z-state.cache.z))+' m'):'');
   $('shopBtn').disabled=$('editBtn').disabled=!isSafe;$('helpBtn').textContent=me.help?'收回舉手':'舉手求助';
   refreshFieldAction();
   const pulse=state.enemies.find(enemy=>enemy.cue?.kind==='pulse'&&Math.hypot(me.x-enemy.cue.x,me.z-enemy.cue.z)<enemy.cue.radius);
@@ -187,11 +221,11 @@ function refreshFieldAction(){
 }
 function frame(now){
   if(!session)return;const dt=clamp((now-clock)/1000,0,.05);clock=now;
-  if(session.teacher&&state&&!document.hidden&&now-lastPreview>=160){
+  if(session.teacher&&state&&state.phase!=='finished'&&!document.hidden&&now-lastPreview>=160){
     lastPreview=now;const view=betweenSnapshots(now);
     for(const p of view.players){const card=cards.get(p.id);if(card&&p.online&&card.visible)scene(card.c,view,p);}
   }
-  if(!session.teacher&&me&&!document.hidden&&!panels.open){
+  if(!session.teacher&&me&&state.phase!=='finished'&&!document.hidden&&!panels.open){
     if(held.has('arrowleft'))yaw-=dt*1.8;if(held.has('arrowright'))yaw+=dt*1.8;
     sampleMovement(now);
     animateGun(dt,now/1000);
@@ -224,7 +258,7 @@ document.addEventListener('visibilitychange',()=>{
   framePacer.reset();
 });
 window.addEventListener('keydown',e=>{
-  if(!me)return;const k=e.key.toLowerCase();
+  if(!me||state.phase==='finished')return;const k=e.key.toLowerCase();
   if(e.target instanceof Element&&e.target.closest('select,input,textarea'))return;
   if(k==='tab'&&!e.repeat&&!panels.open){e.preventDefault();openPanel('blocks');return;}
   if(panels.open)return;
@@ -312,10 +346,25 @@ function shop(){
   }
 }
 function listing(code){return '⚑ 當按下開始時'+(code.loop?'\n  ↻ 重複無限次':'')+code.rules.map(r=>'\n    如果 '+(sensors[r.when]||'…')+' → '+(actions[r.do]||'…')).join('');}
+const autoWaves=$('autoWaves'),waveLimit=$('waveLimit');
+waveLimit.max=waveSettings.maxLimit;waveLimit.value=waveSettings.defaultLimit;
+let storedWaveSettings='',settingsPending=false,feedbackSnapshot='';
 function monitor(){
-  $('round').textContent='第 '+state.wave+' 波　'+phaseLabel[state.phase]+'　｜　'+(state.mode==='defense'?'據點防守 · 發電機 '+state.coreHp+'%':'自由生存')+'　｜　'+state.message;
-  $('pauseBtn').textContent=state.phase==='paused'?'繼續':'暫停';$('pauseBtn').disabled=!['paused','active'].includes(state.phase);
-  $('waveBtn').disabled=!state.players.length||['paused','active'].includes(state.phase);$('waveBtn').textContent=state.phase==='lost'?'重試本波':'開始下一波';
+  const finished=state.phase==='finished';
+  $('round').textContent=waveProgress()+'　｜　'+(state.mode==='defense'?'據點防守 · 發電機 '+state.coreHp+'%':'自由生存')+'　｜　'+state.message;
+  const saved=`${state.autoWaves}:${state.waveLimit}`;
+  if(storedWaveSettings!==saved){
+    storedWaveSettings=saved;autoWaves.checked=state.autoWaves;waveLimit.value=state.waveLimit;
+  }
+  $('waveSetupNote').textContent=state.phase==='ready'?`可設定 1–${waveSettings.maxLimit} 波。自動模式每波休息 ${waveSettings.breakSeconds} 秒。`:`本次採${state.autoWaves?'自動':'手動'}模式，最多 ${state.waveLimit} 波。`;
+  autoWaves.disabled=waveLimit.disabled=$('waveSave').disabled=state.phase!=='ready'||settingsPending;
+  $('pauseBtn').textContent=state.phase==='paused'?'繼續':'暫停';
+  $('pauseBtn').disabled=!['paused','active'].includes(state.phase)&&!(state.phase==='clear'&&state.breakSeconds>0);
+  $('waveBtn').disabled=!state.players.length||['paused','active','finished'].includes(state.phase)||settingsPending;
+  $('waveBtn').textContent=state.phase==='lost'?'重試本波':state.wave===0?'開始第一波':state.phase==='clear'&&state.breakSeconds?'立即開始下一波':'開始下一波';
+  $('modeBtn').disabled=$('mode').disabled=$('recallBtn').disabled=finished;
+  $('finishBtn').disabled=finished||!state.players.length;
+  if(finished)renderFeedback();
   if(!state.players.length)$('cards').textContent='等學生輸入房號加入…';
   for(const p of state.players){
     if(!cards.has(p.id)){if(!cards.size)$('cards').replaceChildren();const card=make('article',undefined,'card'),name=make('h3'),c=make('canvas'),meta=make('p'),b=make('pre');card.append(name,c,meta,b);$('cards').append(card);cards.set(p.id,{name,c,meta,b,visible:true});c.dataset.player=p.id;previewVisibility.observe(c);}
@@ -324,8 +373,42 @@ function monitor(){
     ui.b.textContent='目前積木草稿\n'+listing(p.draft)+(JSON.stringify(p.draft)!==JSON.stringify(p.code)?'\n\n執行中版本\n'+listing(p.code):'');
   }
 }
+$('waveSetup').onsubmit=action(async event=>{
+  event.preventDefault();
+  await saveWaveSettings();
+  notify('波次設定已套用');
+});
+async function saveWaveSettings(){
+  if(!$('waveSetup').reportValidity())throw Error('請填寫有效的波次上限');
+  settingsPending=true;$('waveSave').disabled=true;$('waveBtn').disabled=true;
+  try{await api('teacher',{cmd:'settings',autoWaves:autoWaves.checked,waveLimit:waveLimit.valueAsNumber});}
+  finally{settingsPending=false;monitor();}
+}
+$('finishBtn').onclick=action(async()=>{
+  if(confirm('結束本次挑戰，並讓所有學生開始填寫回饋？'))await api('teacher',{cmd:'finish'});
+});
+function renderFeedback(){
+  $('teacherFeedback').hidden=false;
+  const count=state.players.filter(p=>p.feedback).length;
+  $('feedbackCount').textContent=`已交 ${count} / ${state.players.length} 人`;
+  const signature=JSON.stringify(state.players.map(p=>[p.id,p.name,p.feedback]));
+  if(signature===feedbackSnapshot)return;
+  feedbackSnapshot=signature;
+  const list=$('feedbackList');list.replaceChildren();
+  for(const p of state.players){
+    const card=make('article',undefined,'feedback-reply');
+    card.append(make('h3',p.name));
+    if(!p.feedback)card.append(make('p','尚未繳交','hint'));
+    else{
+      card.append(make('b','學到的事或卡住的地方'),make('p',p.feedback.learning));
+      if(p.feedback.suggestion)card.append(make('b','下次的建議'),make('p',p.feedback.suggestion));
+    }
+    list.append(card);
+  }
+}
 for(const [id,cmd] of [['waveBtn','next'],['pauseBtn','pause'],['recallBtn','recall'],['modeBtn','mode']])$(id).onclick=action(async()=>{
   if(cmd==='mode'&&state.wave>0&&!confirm('切換模式會重新從第 1 波開始，裝備與積木會保留。'))return;
+  if(cmd==='next'&&state.phase==='ready'&&(autoWaves.checked!==state.autoWaves||waveLimit.valueAsNumber!==state.waveLimit))await saveWaveSettings();
   await api('teacher',{cmd,mode:$('mode').value});
 });
 try{const old=JSON.parse(sessionStorage.getItem('outpost.session'));if(old)enter(old).catch(()=>{sessionStorage.removeItem('outpost.session');session=null;});}catch{}

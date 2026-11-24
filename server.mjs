@@ -3,7 +3,7 @@ import {randomInt,randomBytes,timingSafeEqual} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {resolve,extname} from 'node:path';
-import {room,player,edit,buy,cleanInput,control,home,snapshot,tick,interact,practice} from './game.mjs';
+import {room,player,edit,buy,cleanInput,control,home,snapshot,tick,interact,practice,submitFeedback} from './game.mjs';
 import {realtime} from './realtime.mjs';
 
 const publicDir=fileURLToPath(new URL('./public/',import.meta.url));
@@ -46,12 +46,14 @@ function api(name,body,req){
   const {r,p}=auth;r.touched=Date.now();
   if(p)p.seen=Date.now();
   if(name==='sync'){
-    if(p)cleanInput(p,body,r.phase==='paused');
+    if(p&&r.phase!=='finished')cleanInput(p,body,r.phase==='paused');
     return snapshot(r,p?.id,!p);
   }
-  if(name==='teacher'){if(p)fail('限老師使用',403);control(r,body.cmd,body.mode);return {};}
+  if(name==='teacher'){if(p)fail('限老師使用',403);control(r,body.cmd,body.mode,body);return {};}
   if(name==='restore'){return p?{draft:p.draft,code:p.code}:{};}
   if(!p)fail('限學生角色使用');
+  if(name==='feedback')return submitFeedback(r,p,body);
+  if(r.phase==='finished')fail('本次挑戰已結束，請填寫回饋',409);
   switch(name){
     case 'draft':case 'run':edit(p,body,name==='run');break;
     case 'shop':buy(p,body.item);break;

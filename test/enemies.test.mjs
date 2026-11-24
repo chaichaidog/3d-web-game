@@ -14,6 +14,7 @@ function encounter(type){
 
 test('one featured enemy debuts per lesson wave and all models render finite geometry',()=>{
   const r=room('123456');
+  control(r,'settings',undefined,{autoWaves:false,waveLimit:waveOrder.length});
   const unlocked=new Set();
   for(const [i,type] of waveOrder.entries()){
     unlocked.add(type);r.phase='clear';control(r,'next');

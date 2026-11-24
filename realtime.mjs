@@ -31,10 +31,10 @@ export function realtime(server,sessions,api){
         if(sessions.get(token)!==auth){ws.close(4001,'Session ended');return;}
         auth.r.touched=now;if(auth.p)auth.p.seen=now;lastInput=now;
         if(msg.kind==='input'){
-          if(auth.p)cleanInput(auth.p,msg.data||{},auth.r.phase==='paused');
+          if(auth.p&&auth.r.phase!=='finished')cleanInput(auth.p,msg.data||{},auth.r.phase==='paused');
           if(Number.isFinite(msg.clientTime))ws.clientTime=msg.clientTime;
         }else if(msg.kind==='rpc'){
-          if(!['teacher','restore','draft','run','shop','home','help','interact','practice'].includes(msg.op))throw Error('Unknown operation');
+          if(!['teacher','restore','draft','run','shop','home','help','interact','practice','feedback'].includes(msg.op))throw Error('Unknown operation');
           const data=api(msg.op,msg.data||{},{headers:{authorization:'Bearer '+token},socket:req.socket});
           ws.send(JSON.stringify({kind:'reply',id:msg.id,data}));
         }

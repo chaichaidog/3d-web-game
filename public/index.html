@@ -6,5 +6,16 @@
 <form id="create" hidden><label>老師開房密碼<input type="password" id="key" required autocomplete="current-password"></label><button class="primary">建立教室　→</button></form><p class="error" id="entryError" role="alert"></p><button class="link" id="role">老師開房 ↗</button></section></main>
 <main id="game" hidden><section id="guide" aria-label="新手練習"><div><small id="guideStep">新手練習</small><h2 id="guideTitle">走出第一步</h2><p id="guideText"></p></div><div class="guide-actions"><button id="guideAction" class="primary">打開積木</button><button id="skipGuide" class="link">收起教學</button></div></section><button id="resumeGuide" hidden>查看新手教學</button><div class="gameview"><canvas id="world" tabindex="0" aria-label="學生第一人稱遊戲畫面"></canvas><div id="hud"></div><div id="reticle">＋</div><div id="task"></div></div>
 <nav><button id="editBtn">Tab　積木</button><button id="shopBtn">商店</button><button id="backBtn">返回基地</button><button id="helpBtn">舉手求助</button></nav><p class="hint">點遊戲畫面用滑鼠轉向，Esc 釋放滑鼠。也可用 ← → 轉向。亮色地圈內可編輯，走出光圈即可試射。</p></main>
-<main id="teacher" hidden><small>MISSION CONTROL</small><h1>教室指揮台</h1><div id="roomTitle"></div><div class="tools"><select id="mode"><option value="survival">自由生存</option><option value="defense">據點防守</option></select><button id="modeBtn">切換模式</button><button class="primary" id="waveBtn">開始下一波</button><button id="pauseBtn">暫停</button><button id="recallBtn">全員回城</button></div><p id="round"></p><section id="cards"></section></main>
+<main id="feedbackPage" hidden><section class="feedback-card" aria-labelledby="feedbackTitle">
+<h1 id="feedbackTitle">課堂回饋</h1><p id="feedbackResult"></p><p class="hint">用自己的話寫就好。老師會看到你的回答。</p>
+<form id="feedbackForm"><label>這次你學到了什麼，或在哪一步卡住？<textarea id="feedbackLearning" required rows="4" placeholder="例如：我把 W 接到向前移動，後來才發現要按執行。"></textarea></label>
+<label>下次你希望改進什麼？（選填）<textarea id="feedbackSuggestion" rows="3" placeholder="例如：希望怪物的提示可以大一點。"></textarea></label>
+<button class="primary" id="submitFeedback">送出回饋</button><p id="feedbackStatus" role="status"></p></form></section></main>
+<main id="teacher" hidden><small>MISSION CONTROL</small><h1>教室指揮台</h1><div id="roomTitle"></div>
+<form id="waveSetup" class="wave-setup" aria-label="波次設定">
+<label><input id="autoWaves" type="checkbox" checked> 自動開始下一波</label>
+<label>波次上限 <input id="waveLimit" type="number" min="1" step="1" required></label>
+<button id="waveSave" type="submit">套用波次設定</button><span id="waveSetupNote" class="hint"></span></form>
+<div class="tools"><select id="mode"><option value="survival">自由生存</option><option value="defense">據點防守</option></select><button id="modeBtn">切換模式</button><button class="primary" id="waveBtn">開始第一波</button><button id="pauseBtn">暫停</button><button id="recallBtn">全員回城</button><button id="finishBtn">結束並收回饋</button></div>
+<p id="round"></p><section id="teacherFeedback" hidden aria-labelledby="feedbackHeading"><h2 id="feedbackHeading">學生課堂回饋</h2><p id="feedbackCount"></p><div id="feedbackList"></div></section><section id="cards"></section></main>
 <dialog id="panel"><div class="modalhead"><div><small>FIELD WORKBENCH</small><h2 id="panelTitle"></h2></div><button id="closePanel" aria-label="關閉">✕</button></div><div id="panelBody"></div></dialog><div id="toast" role="status"></div><script type="module" src="/app.js"></script></body></html>
