@@ -54,6 +54,7 @@
 .card h3{margin:0 0 8px}dialog{background:#202b38;color:var(--ink);width:min(840px,96vw);max-height:85vh;border:1px solid var(--line);border-radius:12px;padding:20px}dialog::backdrop{background:#111823ba}
 .modalhead{display:flex;align-items:center;justify-content:space-between}
 .modalhead h2{font-size:24px;margin:4px 0 12px}
+#finishDialog{width:min(420px,94vw)}
 .bench{display:grid;grid-template-columns:175px 1fr;gap:14px}
 .palette,.stack{padding:10px;background:#19232e;border-radius:7px}
 .block{border:0;border-radius:5px;color:#e8edf3;padding:7px 10px;font-weight:600;display:inline-block;margin:3px}

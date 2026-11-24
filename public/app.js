@@ -364,7 +364,10 @@ function monitor(){
   $('waveBtn').textContent=state.phase==='lost'?'重試本波':state.wave===0?'開始第一波':state.phase==='clear'&&state.breakSeconds?'立即開始下一波':'開始下一波';
   $('modeBtn').disabled=$('mode').disabled=$('recallBtn').disabled=finished;
   $('finishBtn').disabled=finished||!state.players.length;
-  if(finished)renderFeedback();
+  if(finished){
+    if($('finishDialog').open)$('finishDialog').close();
+    renderFeedback();
+  }
   if(!state.players.length)$('cards').textContent='等學生輸入房號加入…';
   for(const p of state.players){
     if(!cards.has(p.id)){if(!cards.size)$('cards').replaceChildren();const card=make('article',undefined,'card'),name=make('h3'),c=make('canvas'),meta=make('p'),b=make('pre');card.append(name,c,meta,b);$('cards').append(card);cards.set(p.id,{name,c,meta,b,visible:true});c.dataset.player=p.id;previewVisibility.observe(c);}
@@ -384,8 +387,14 @@ async function saveWaveSettings(){
   try{await api('teacher',{cmd:'settings',autoWaves:autoWaves.checked,waveLimit:waveLimit.valueAsNumber});}
   finally{settingsPending=false;monitor();}
 }
-$('finishBtn').onclick=action(async()=>{
-  if(confirm('結束本次挑戰，並讓所有學生開始填寫回饋？'))await api('teacher',{cmd:'finish'});
+$('finishBtn').onclick=()=>$('finishDialog').showModal();
+$('finishConfirm').onclick=action(async event=>{
+  const button=event.currentTarget;
+  button.disabled=true;
+  try{
+    await api('teacher',{cmd:'finish'});
+    $('finishDialog').close();
+  }finally{button.disabled=false;}
 });
 function renderFeedback(){
   $('teacherFeedback').hidden=false;
